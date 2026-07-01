@@ -794,7 +794,7 @@ function Builder({ ranges, rangeFolders, onSaveRange, onDeleteRange, onDuplicate
               {actionCounts.map((a) => (
                 <div key={a.id} className="flex items-center justify-between text-xs">
                   <span style={{ color: a.color }} className="font-medium truncate mr-1">{a.label}</span>
-                  <span className="text-muted-foreground flex-shrink-0" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{a.count}</span>
+                  <span className="text-muted-foreground flex-shrink-0" style={{ fontFamily: "'JetBrains Mono', monospace" }}>{a.count} ({(a.count / 169 * 100).toFixed(1)}%)</span>
                 </div>
               ))}
             </div>
