@@ -1,8 +1,10 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
-import { Download, Upload, Plus, Trash2, Pencil, Check, X, ChevronDown, ChevronUp, Square, Sun, Moon } from "lucide-react";
+import { Download, Upload, Plus, Trash2, Pencil, Check, X, ChevronDown, ChevronUp, ChevronRight, Square, Sun, Moon, FolderPlus } from "lucide-react";
 import logoSvg from "./imgs/logo.svg";
+import { DndProvider, useDrag, useDrop } from "react-dnd";
+import { HTML5Backend } from "react-dnd-html5-backend";
 
 
 // ─── Position constants ───────────────────────────────────────────────────────
@@ -239,6 +241,13 @@ interface Drill {
   rangeId: string;
   foldedPositions: string[];
   betSizes: Record<string, string>;
+  folderId: string | null;
+}
+
+interface Folder {
+  id: string;
+  name: string;
+  parentId: string | null;
 }
 
 // ─── Drill editor ─────────────────────────────────────────────────────────────
@@ -300,6 +309,7 @@ function DrillEditor({ initial, ranges, onSave, onCancel }: DrillEditorProps) {
       rangeId,
       foldedPositions,
       betSizes,
+      folderId: initial?.folderId ?? null,
     });
   }
 
@@ -489,12 +499,15 @@ interface Range {
   id: string;
   name: string;
   grid: Record<string, string>;
+  folderId: string | null;
 }
 
 interface AppData {
   actions: ActionDef[];
   ranges: Range[];
   drills: Drill[];
+  rangeFolders: Folder[];
+  drillFolders: Folder[];
 }
 
 interface ComboStat {
@@ -684,12 +697,17 @@ function ActionManager({ actions, onChange }: { actions: ActionDef[]; onChange: 
 interface BuilderProps {
   ranges: Range[];
   actions: ActionDef[];
+  rangeFolders: Folder[];
   onSaveRange: (r: Range) => void;
   onDeleteRange: (id: string) => void;
+  onMoveRange: (id: string, folderId: string | null) => void;
+  onNewRangeFolder: (parentId: string | null) => void;
+  onRenameRangeFolder: (id: string, name: string) => void;
+  onDeleteRangeFolder: (id: string) => void;
   onActionsChange: (a: ActionDef[]) => void;
 }
 
-function Builder({ ranges, actions, onSaveRange, onDeleteRange, onActionsChange }: BuilderProps) {
+function Builder({ ranges, actions, rangeFolders, onSaveRange, onDeleteRange, onMoveRange, onNewRangeFolder, onRenameRangeFolder, onDeleteRangeFolder, onActionsChange }: BuilderProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [rangeName, setRangeName] = useState("New Range");
   const [grid, setGrid] = useState<Record<string, string>>({});
@@ -705,7 +723,8 @@ function Builder({ ranges, actions, onSaveRange, onDeleteRange, onActionsChange 
   function saveRange() {
     if (!rangeName.trim()) return;
     const id = editingId ?? `range-${Date.now()}`;
-    onSaveRange({ id, name: rangeName.trim(), grid });
+    const existing = ranges.find((r) => r.id === id);
+    onSaveRange({ id, name: rangeName.trim(), grid, folderId: existing?.folderId ?? null });
     setEditingId(id);
   }
   const paint = useCallback((hand: string) => {
@@ -724,14 +743,29 @@ function Builder({ ranges, actions, onSaveRange, onDeleteRange, onActionsChange 
         <button onClick={newRange} className="w-full text-sm font-semibold py-2 px-3 rounded-md border border-dashed border-border text-muted-foreground hover:border-primary hover:text-primary transition-colors flex-shrink-0">
           + New Range
         </button>
-        <div className="flex flex-col gap-1 flex-1">
-          {ranges.length === 0 && <p className="text-xs text-muted-foreground text-center mt-4">No ranges yet</p>}
-          {ranges.map((r) => (
-            <div key={r.id} className={`group flex items-center justify-between px-3 py-2 rounded-md cursor-pointer transition-colors text-sm ${editingId === r.id ? "bg-accent text-accent-foreground" : "hover:bg-secondary text-muted-foreground hover:text-foreground"}`} onClick={() => loadRange(r)}>
-              <span className="truncate font-medium">{r.name}</span>
-              <button onClick={(e) => { e.stopPropagation(); onDeleteRange(r.id); if (editingId === r.id) newRange(); }} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"><X size={12} /></button>
-            </div>
-          ))}
+        <div className="flex items-center justify-between flex-shrink-0">
+          <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Folders</span>
+          <button onClick={() => onNewRangeFolder(null)} className="text-muted-foreground hover:text-primary transition-colors"><FolderPlus size={12} /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          <FolderTree
+            items={ranges}
+            folders={rangeFolders}
+            onMoveItem={onMoveRange}
+            onDeleteFolder={onDeleteRangeFolder}
+            onRenameFolder={onRenameRangeFolder}
+            selectedItemId={editingId}
+            onSelectItem={(item) => { const r = ranges.find((x) => x.id === item.id); if (r) loadRange(r); }}
+            renderItem={(item) => {
+              const isSelected = item.id === editingId;
+              return (
+                <div className={`group flex items-center justify-between px-2 py-1.5 rounded-md cursor-pointer transition-colors text-xs ${isSelected ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}>
+                  <span className="truncate font-medium">{item.name}</span>
+                  <button onClick={(e) => { e.stopPropagation(); onDeleteRange(item.id); if (editingId === item.id) newRange(); }} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"><X size={10} /></button>
+                </div>
+              );
+            }}
+          />
         </div>
         <div className="border-t border-border pt-3 flex-shrink-0">
           <button onClick={() => setShowActionManager((v) => !v)} className="text-xs font-medium text-muted-foreground hover:text-foreground w-full flex items-center justify-between mb-2 transition-colors">
@@ -799,11 +833,16 @@ interface TrainerProps {
   ranges: Range[];
   actions: ActionDef[];
   drills: Drill[];
+  drillFolders: Folder[];
   onSaveDrill: (d: Drill) => void;
   onDeleteDrill: (id: string) => void;
+  onMoveDrill: (id: string, folderId: string | null) => void;
+  onNewDrillFolder: (parentId: string | null) => void;
+  onRenameDrillFolder: (id: string, name: string) => void;
+  onDeleteDrillFolder: (id: string) => void;
 }
 
-function Trainer({ ranges, actions, drills, onSaveDrill, onDeleteDrill }: TrainerProps) {
+function Trainer({ ranges, actions, drills, drillFolders, onSaveDrill, onDeleteDrill, onMoveDrill, onNewDrillFolder, onRenameDrillFolder, onDeleteDrillFolder }: TrainerProps) {
   const [view, setView] = useState<TrainerView>("drills");
   const [selectedDrillId, setSelectedDrillId] = useState<string | null>(null);
   const [editingDrill, setEditingDrill] = useState<Drill | undefined>(undefined);
@@ -1001,41 +1040,55 @@ function Trainer({ ranges, actions, drills, onSaveDrill, onDeleteDrill }: Traine
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Drills</span>
-            <button
-              onClick={startNewDrill}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"
-            >
-              <Plus size={11} /> New
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => onNewDrillFolder(null)}
+                className="text-muted-foreground hover:text-primary transition-colors"
+                title="New folder"
+              >
+                <FolderPlus size={12} />
+              </button>
+              <button
+                onClick={startNewDrill}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"
+              >
+                <Plus size={11} /> New
+              </button>
+            </div>
           </div>
 
-          {drills.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No drills yet — create one to get started.</p>
-          ) : (
-            <div className="flex flex-col gap-1">
-              {drills.map((d) => {
-                const active = d.id === selectedDrillId;
+          <div className="flex flex-col gap-1">
+            <FolderTree
+              items={drills}
+              folders={drillFolders}
+              onMoveItem={onMoveDrill}
+              onDeleteFolder={onDeleteDrillFolder}
+              onRenameFolder={onRenameDrillFolder}
+              selectedItemId={selectedDrillId}
+              onSelectItem={(item) => { const d = drills.find((x) => x.id === item.id); if (d) selectDrill(d); }}
+              renderItem={(item) => {
+                const d = drills.find((x) => x.id === item.id);
+                const active = item.id === selectedDrillId;
                 return (
-                  <div
-                    key={d.id}
-                    onClick={() => selectDrill(d)}
-                    className={`group flex items-start justify-between px-3 py-2 rounded-md cursor-pointer transition-colors ${active ? "bg-accent" : "hover:bg-secondary"}`}
-                  >
+                  <div className={`group flex items-start justify-between px-2 py-1.5 rounded-md cursor-pointer transition-colors ${active ? "bg-accent" : "hover:bg-secondary"}`}>
                     <div className="flex flex-col min-w-0">
-                      <span className={`text-sm font-medium truncate ${active ? "text-accent-foreground" : "text-muted-foreground group-hover:text-foreground"}`}>{d.name}</span>
-                      <span className="text-[10px] text-muted-foreground mt-0.5" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-                        {d.numPlayers}p · {d.heroPosition}
-                      </span>
+                      <span className={`text-xs font-medium truncate ${active ? "text-accent-foreground" : "text-muted-foreground group-hover:text-foreground"}`}>{item.name}</span>
+                      {d && (
+                        <span className="text-[9px] text-muted-foreground" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+                          {d.numPlayers}p · {d.heroPosition}
+                        </span>
+                      )}
                     </div>
-                    <div className="flex gap-1 flex-shrink-0 ml-1 mt-0.5">
-                      <button onClick={(e) => { e.stopPropagation(); editDrill(d); }} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-all"><Pencil size={10} /></button>
-                      <button onClick={(e) => { e.stopPropagation(); onDeleteDrill(d.id); if (selectedDrillId === d.id) { setSelectedDrillId(null); setView("drills"); } }} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"><Trash2 size={10} /></button>
+                    <div className="flex gap-1 flex-shrink-0 ml-1">
+                      <button onClick={(e) => { e.stopPropagation(); if (d) editDrill(d); }} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-all"><Pencil size={9} /></button>
+                      <button onClick={(e) => { e.stopPropagation(); onDeleteDrill(item.id); if (selectedDrillId === item.id) { setSelectedDrillId(null); setView("drills"); } }} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"><Trash2 size={9} /></button>
                     </div>
                   </div>
                 );
-              })}
-            </div>
-          )}
+              }}
+              emptyMessage="No drills yet — create one to get started."
+            />
+          </div>
         </div>
 
         {/* Training section (only when a drill is active) */}
@@ -1309,6 +1362,248 @@ function Trainer({ ranges, actions, drills, onSaveDrill, onDeleteDrill }: Traine
   );
 }
 
+// ─── Folder Tree ─────────────────────────────────────────────────────────────
+
+const DND_ITEM = "TREE_ITEM";
+
+function FolderTree({
+  items,
+  folders,
+  onMoveItem,
+  onDeleteFolder,
+  onRenameFolder,
+  onSelectItem,
+  renderItem,
+  emptyMessage = "No items yet",
+}: {
+  items: { id: string; name: string; folderId: string | null }[];
+  folders: Folder[];
+  onMoveItem: (itemId: string, toFolderId: string | null) => void;
+  onDeleteFolder: (folderId: string) => void;
+  onRenameFolder: (folderId: string, name: string) => void;
+  onSelectItem: (item: { id: string; name: string; folderId: string | null }) => void;
+  renderItem: (item: { id: string; name: string; folderId: string | null }) => React.ReactNode;
+  emptyMessage?: string;
+}) {
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+
+  const prevFolderIds = useRef(new Set(folders.map((f) => f.id)));
+  useEffect(() => {
+    const currentIds = new Set(folders.map((f) => f.id));
+    const newIds = [...currentIds].filter((id) => !prevFolderIds.current.has(id));
+    if (newIds.length > 0) {
+      setExpandedFolders((prev) => {
+        const next = new Set(prev);
+        newIds.forEach((id) => next.add(id));
+        return next;
+      });
+    }
+    prevFolderIds.current = currentIds;
+  }, [folders]);
+
+  function toggleFolder(id: string) {
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function commitRename() {
+    if (renamingId && renameValue.trim()) {
+      onRenameFolder(renamingId, renameValue.trim());
+    }
+    setRenamingId(null);
+  }
+
+  const rootFolders = folders.filter((f) => f.parentId === null);
+  const rootItems = items.filter((i) => i.folderId === null);
+  const hasContent = rootFolders.length > 0 || rootItems.length > 0;
+
+  const [{ isOver: isRootOver }, rootDropRef] = useDrop(() => ({
+    accept: DND_ITEM,
+    drop: (dragItem: { id: string }) => { onMoveItem(dragItem.id, null); },
+    collect: (monitor) => ({ isOver: monitor.isOver() }),
+  }), [items, folders]);
+
+  return (
+    <div className="flex flex-col gap-1">
+      {rootFolders.map((f) => (
+        <FolderNode
+          key={f.id}
+          folder={f}
+          depth={0}
+          items={items}
+          folders={folders}
+          expandedFolders={expandedFolders}
+          renamingId={renamingId}
+          renameValue={renameValue}
+          onToggleFolder={toggleFolder}
+          onRenameChange={setRenameValue}
+          onCommitRename={commitRename}
+          onCancelRename={() => setRenamingId(null)}
+          onStartRename={(id, name) => { setRenamingId(id); setRenameValue(name); }}
+          onMoveItem={onMoveItem}
+          onDeleteFolder={onDeleteFolder}
+          onSelectItem={onSelectItem}
+          renderItem={renderItem}
+        />
+      ))}
+      <div ref={rootDropRef} className={`flex flex-col gap-1 rounded-sm ${isRootOver ? "bg-accent/50" : ""}`}>
+        {rootItems.map((item) => (
+          <ItemNode
+            key={item.id}
+            item={item}
+            depth={0}
+            onSelectItem={onSelectItem}
+            renderItem={renderItem}
+          />
+        ))}
+      </div>
+      {!hasContent && (
+        <p className="text-xs text-muted-foreground text-center mt-2">{emptyMessage}</p>
+      )}
+    </div>
+  );
+}
+
+function FolderNode({
+  folder, depth, items, folders, expandedFolders,
+  renamingId, renameValue,
+  onToggleFolder, onRenameChange, onCommitRename, onCancelRename, onStartRename,
+  onMoveItem, onDeleteFolder, onSelectItem, renderItem,
+}: {
+  folder: Folder; depth: number;
+  items: { id: string; name: string; folderId: string | null }[];
+  folders: Folder[];
+  expandedFolders: Set<string>;
+  renamingId: string | null; renameValue: string;
+  onToggleFolder: (id: string) => void;
+  onRenameChange: (v: string) => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
+  onStartRename: (id: string, name: string) => void;
+  onMoveItem: (itemId: string, toFolderId: string | null) => void;
+  onDeleteFolder: (folderId: string) => void;
+  onSelectItem: (item: { id: string; name: string; folderId: string | null }) => void;
+  renderItem: (item: { id: string; name: string; folderId: string | null }) => React.ReactNode;
+}) {
+  const isExpanded = expandedFolders.has(folder.id);
+  const childFolders = folders.filter((f) => f.parentId === folder.id);
+  const childItems = items.filter((i) => i.folderId === folder.id);
+
+  const [{ isOver }, dropRef] = useDrop(() => ({
+    accept: DND_ITEM,
+    drop: (dragItem: { id: string }) => { onMoveItem(dragItem.id, folder.id); },
+    collect: (monitor) => ({ isOver: monitor.isOver() }),
+  }), [folder.id, items, folders]);
+
+  return (
+    <div ref={dropRef} className={`transition-colors rounded-sm ${isOver ? "bg-accent/50" : ""}`}>
+      <div
+        className="flex items-center gap-1 px-1 py-1 rounded-sm hover:bg-secondary cursor-pointer group"
+        style={{ paddingLeft: `${8 + depth * 16}px` }}
+        onClick={() => onToggleFolder(folder.id)}
+      >
+        {isExpanded ? <ChevronDown size={12} className="text-muted-foreground flex-shrink-0" /> : <ChevronRight size={12} className="text-muted-foreground flex-shrink-0" />}
+        <span className="text-xs font-medium text-muted-foreground truncate flex-1">{folder.name}</span>
+        <button
+          onClick={(e) => { e.stopPropagation(); onStartRename(folder.id, folder.name); }}
+          className="text-muted-foreground hover:text-foreground transition-all flex-shrink-0"
+          title="Rename folder"
+        >
+          <Pencil size={10} />
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); onDeleteFolder(folder.id); }}
+          className="text-muted-foreground hover:text-destructive transition-all flex-shrink-0"
+          title="Delete folder"
+        >
+          <Trash2 size={10} />
+        </button>
+      </div>
+      {renamingId === folder.id && (
+        <div style={{ paddingLeft: `${16 + depth * 16}px` }} className="px-1 pb-1">
+          <input
+            autoFocus
+            value={renameValue}
+            onChange={(e) => onRenameChange(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") onCommitRename(); if (e.key === "Escape") onCancelRename(); }}
+            onBlur={onCommitRename}
+            className="w-full bg-secondary text-foreground text-xs px-2 py-1 rounded border border-border focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        </div>
+      )}
+      {isExpanded && (
+        <div>
+          {childFolders.map((cf) => (
+            <FolderNode
+              key={cf.id}
+              folder={cf}
+              depth={depth + 1}
+              items={items}
+              folders={folders}
+              expandedFolders={expandedFolders}
+              renamingId={renamingId}
+              renameValue={renameValue}
+              onToggleFolder={onToggleFolder}
+              onRenameChange={onRenameChange}
+              onCommitRename={onCommitRename}
+              onCancelRename={onCancelRename}
+              onStartRename={onStartRename}
+              onMoveItem={onMoveItem}
+              onDeleteFolder={onDeleteFolder}
+              onSelectItem={onSelectItem}
+              renderItem={renderItem}
+            />
+          ))}
+          {childItems.map((item) => (
+            <ItemNode
+              key={item.id}
+              item={item}
+              depth={depth + 1}
+              onSelectItem={onSelectItem}
+              renderItem={renderItem}
+            />
+          ))}
+          {childFolders.length === 0 && childItems.length === 0 && (
+            <div style={{ paddingLeft: `${16 + (depth + 1) * 16}px` }} className="text-[10px] text-muted-foreground py-1">Empty folder</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ItemNode({
+  item, depth, onSelectItem, renderItem,
+}: {
+  item: { id: string; name: string; folderId: string | null };
+  depth: number;
+  onSelectItem: (item: { id: string; name: string; folderId: string | null }) => void;
+  renderItem: (item: { id: string; name: string; folderId: string | null }) => React.ReactNode;
+}) {
+  const [{ isDragging }, dragRef] = useDrag(() => ({
+    type: DND_ITEM,
+    item: { id: item.id },
+    collect: (monitor) => ({ isDragging: monitor.isDragging() }),
+  }), [item.id]);
+
+  return (
+    <div
+      ref={dragRef}
+      className={`transition-opacity ${isDragging ? "opacity-40" : ""}`}
+      style={{ paddingLeft: `${8 + depth * 16}px` }}
+      onClick={() => onSelectItem(item)}
+    >
+      {renderItem(item)}
+    </div>
+  );
+}
+
 // ─── LocalStorage persistence ─────────────────────────────────────────────────
 
 const STORAGE_KEY = "poker-trainer-data";
@@ -1343,12 +1638,14 @@ export default function App() {
   const { theme, setTheme } = useTheme();
   const saved = useRef(loadFromStorage()).current;
   const [tab, setTab] = useState<"builder" | "trainer">("builder");
-  const [ranges, setRanges] = useState<Range[]>(saved.ranges ?? []);
+  const [ranges, setRanges] = useState<Range[]>(() => (saved.ranges ?? []).map((r) => ({ ...r, folderId: r.folderId ?? null })));
   const [actions, setActions] = useState<ActionDef[]>(saved.actions ?? DEFAULT_ACTIONS);
-  const [drills, setDrills] = useState<Drill[]>(saved.drills ?? []);
+  const [drills, setDrills] = useState<Drill[]>(() => (saved.drills ?? []).map((d) => ({ ...d, folderId: d.folderId ?? null })));
+  const [rangeFolders, setRangeFolders] = useState<Folder[]>(saved.rangeFolders ?? []);
+  const [drillFolders, setDrillFolders] = useState<Folder[]>(saved.drillFolders ?? []);
   const importRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { saveToStorage({ actions, ranges, drills }); }, [actions, ranges, drills]);
+  useEffect(() => { saveToStorage({ actions, ranges, drills, rangeFolders, drillFolders }); }, [actions, ranges, drills, rangeFolders, drillFolders]);
 
   function saveRange(range: Range) {
     setRanges((prev) => {
@@ -1366,8 +1663,64 @@ export default function App() {
     });
   }
 
+  function deleteRange(id: string) {
+    setRanges((p) => p.filter((r) => r.id !== id));
+  }
+
+  function deleteDrill(id: string) {
+    setDrills((p) => p.filter((d) => d.id !== id));
+  }
+
+  function moveRange(id: string, folderId: string | null) {
+    setRanges((prev) => prev.map((r) => r.id === id ? { ...r, folderId } : r));
+  }
+
+  function moveDrill(id: string, folderId: string | null) {
+    setDrills((prev) => prev.map((d) => d.id === id ? { ...d, folderId } : d));
+  }
+
+  function newRangeFolder(parentId: string | null) {
+    const id = `rfolder-${Date.now()}`;
+    setRangeFolders((prev) => [...prev, { id, name: "New Folder", parentId }]);
+  }
+
+  function renameRangeFolder(id: string, name: string) {
+    setRangeFolders((prev) => prev.map((f) => f.id === id ? { ...f, name } : f));
+  }
+
+  function deleteRangeFolder(id: string) {
+    const idsToDelete = new Set<string>();
+    function collectIds(fid: string) {
+      idsToDelete.add(fid);
+      rangeFolders.filter((f) => f.parentId === fid).forEach((f) => collectIds(f.id));
+    }
+    collectIds(id);
+    setRangeFolders((prev) => prev.filter((f) => !idsToDelete.has(f.id)));
+    setRanges((prev) => prev.map((r) => idsToDelete.has(r.folderId ?? "") ? { ...r, folderId: null } : r));
+  }
+
+  function newDrillFolder(parentId: string | null) {
+    const id = `dfolder-${Date.now()}`;
+    setDrillFolders((prev) => [...prev, { id, name: "New Folder", parentId }]);
+  }
+
+  function renameDrillFolder(id: string, name: string) {
+    setDrillFolders((prev) => prev.map((f) => f.id === id ? { ...f, name } : f));
+  }
+
+  function deleteDrillFolder(id: string) {
+    const idsToDelete = new Set<string>();
+    function collectIds(fid: string) {
+      idsToDelete.add(fid);
+      drillFolders.filter((f) => f.parentId === fid).forEach((f) => collectIds(f.id));
+    }
+    collectIds(id);
+    setDrillFolders((prev) => prev.filter((f) => !idsToDelete.has(f.id)));
+    setDrills((prev) => prev.map((d) => idsToDelete.has(d.folderId ?? "") ? { ...d, folderId: null } : d));
+  }
+
   function exportData() {
-    const data: AppData = { actions, ranges, drills };
+    const data: AppData = { actions, ranges, drills, rangeFolders, drillFolders };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1385,8 +1738,10 @@ export default function App() {
       try {
         const data = JSON.parse(ev.target?.result as string) as Partial<AppData>;
         if (data.actions && Array.isArray(data.actions)) setActions(data.actions);
-        if (data.ranges && Array.isArray(data.ranges)) setRanges(data.ranges);
-        if (data.drills && Array.isArray(data.drills)) setDrills(data.drills);
+        if (data.ranges && Array.isArray(data.ranges)) setRanges(data.ranges.map((r) => ({ ...r, folderId: r.folderId ?? null })));
+        if (data.drills && Array.isArray(data.drills)) setDrills(data.drills.map((d) => ({ ...d, folderId: d.folderId ?? null })));
+        if (data.rangeFolders && Array.isArray(data.rangeFolders)) setRangeFolders(data.rangeFolders);
+        if (data.drillFolders && Array.isArray(data.drillFolders)) setDrillFolders(data.drillFolders);
       } catch { alert("Invalid file format."); }
     };
     reader.readAsText(file);
@@ -1394,45 +1749,47 @@ export default function App() {
   }
 
   return (
-    <div className="w-full h-screen flex flex-col overflow-hidden bg-background text-foreground" style={{ fontFamily: "'Inter', sans-serif" }}>
-      <header className="flex-shrink-0 border-b border-border px-6 py-3 flex items-center gap-6">
-          <div className="flex items-center gap-2.5">
-            <img src={logoSvg as string} alt="GrindSafe Trainer" className="h-[22px]" />
-            <a href="https://github.com/grindsafes/preflop-trainer" target="_blank" rel="noopener noreferrer"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/grindsafes/preflop-trainer" className="h-5" /></a>
-        </div>
-        <nav className="flex gap-1">
-          {(["builder", "trainer"] as const).map((t) => (
-            <button key={t} onClick={() => setTab(t)} className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === t ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
-              {t === "builder" ? "Range Builder" : "Trainer"}
+    <DndProvider backend={HTML5Backend}>
+      <div className="w-full h-screen flex flex-col overflow-hidden bg-background text-foreground" style={{ fontFamily: "'Inter', sans-serif" }}>
+        <header className="flex-shrink-0 border-b border-border px-6 py-3 flex items-center gap-6">
+            <div className="flex items-center gap-2.5">
+              <img src={logoSvg as string} alt="GrindSafe Trainer" className="h-[22px]" />
+              <a href="https://github.com/grindsafes/preflop-trainer" target="_blank" rel="noopener noreferrer"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/grindsafes/preflop-trainer" className="h-5" /></a>
+          </div>
+          <nav className="flex gap-1">
+            {(["builder", "trainer"] as const).map((t) => (
+              <button key={t} onClick={() => setTab(t)} className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === t ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                {t === "builder" ? "Range Builder" : "Trainer"}
+              </button>
+            ))}
+          </nav>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-xs text-muted-foreground mr-2">{ranges.length} range{ranges.length !== 1 ? "s" : ""} · {drills.length} drill{drills.length !== 1 ? "s" : ""}</span>
+            <button
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-muted-foreground transition-colors"
+              title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+            >
+              {theme === "dark" ? <Sun size={13} /> : <Moon size={13} />}
             </button>
-          ))}
-        </nav>
-        <div className="ml-auto flex items-center gap-2">
-          <span className="text-xs text-muted-foreground mr-2">{ranges.length} range{ranges.length !== 1 ? "s" : ""} · {drills.length} drill{drills.length !== 1 ? "s" : ""}</span>
-          <button
-            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-muted-foreground transition-colors"
-            title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
-          >
-            {theme === "dark" ? <Sun size={13} /> : <Moon size={13} />}
-          </button>
-          <button onClick={exportData} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-muted-foreground transition-colors">
-            <Download size={13} /> Export
-          </button>
-          <button onClick={() => importRef.current?.click()} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-muted-foreground transition-colors">
-            <Upload size={13} /> Import
-          </button>
-          <input ref={importRef} type="file" accept=".json" className="hidden" onChange={importData} />
-        </div>
-      </header>
+            <button onClick={exportData} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-muted-foreground transition-colors">
+              <Download size={13} /> Export
+            </button>
+            <button onClick={() => importRef.current?.click()} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-muted-foreground transition-colors">
+              <Upload size={13} /> Import
+            </button>
+            <input ref={importRef} type="file" accept=".json" className="hidden" onChange={importData} />
+          </div>
+        </header>
 
-      <main className="flex-1 overflow-hidden p-5">
-        {tab === "builder" ? (
-          <Builder ranges={ranges} actions={actions} onSaveRange={saveRange} onDeleteRange={(id) => setRanges((p) => p.filter((r) => r.id !== id))} onActionsChange={setActions} />
-        ) : (
-          <Trainer ranges={ranges} actions={actions} drills={drills} onSaveDrill={saveDrill} onDeleteDrill={(id) => setDrills((p) => p.filter((d) => d.id !== id))} />
-        )}
-      </main>
-    </div>
+        <main className="flex-1 overflow-hidden p-5">
+          {tab === "builder" ? (
+            <Builder ranges={ranges} actions={actions} rangeFolders={rangeFolders} onSaveRange={saveRange} onDeleteRange={deleteRange} onMoveRange={moveRange} onNewRangeFolder={newRangeFolder} onRenameRangeFolder={renameRangeFolder} onDeleteRangeFolder={deleteRangeFolder} onActionsChange={setActions} />
+          ) : (
+            <Trainer ranges={ranges} actions={actions} drills={drills} drillFolders={drillFolders} onSaveDrill={saveDrill} onDeleteDrill={deleteDrill} onMoveDrill={moveDrill} onNewDrillFolder={newDrillFolder} onRenameDrillFolder={renameDrillFolder} onDeleteDrillFolder={deleteDrillFolder} />
+          )}
+        </main>
+      </div>
+    </DndProvider>
   );
 }
