@@ -496,6 +496,22 @@ interface AppData {
   drills: Drill[];
 }
 
+interface ComboStat {
+  correct: number;
+  total: number;
+}
+
+interface SessionData {
+  id: string;
+  drillId: string;
+  startedAt: number;
+  endedAt: number | null;
+  total: number;
+  correct: number;
+  history: { hand: string; correct: boolean }[];
+  comboStats: Record<string, ComboStat>;
+}
+
 function RangeGrid({
   grid, actions, selectedAction, onPaint, readOnly = false, highlightHand,
 }: {
@@ -551,6 +567,47 @@ function RangeGrid({
               <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "clamp(5px, 0.9vw, 10px)", fontWeight: 600, lineHeight: 1 }}>
                 {hand}
               </span>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+// ─── Session Grid ───────────────────────────────────────────────────────────
+
+function SessionGrid({ comboStats }: { comboStats: Record<string, ComboStat> }) {
+  function getAccuracyColor(cs: ComboStat | undefined) {
+    if (!cs || cs.total === 0) return { bg: "var(--muted)", text: "var(--muted-foreground)", border: "var(--border)" };
+    const pct = cs.correct / cs.total;
+    if (pct >= 0.8) return { bg: "#dcfce7", text: "#16a34a", border: "#86efac" };
+    if (pct >= 0.6) return { bg: "#fef9c3", text: "#ca8a04", border: "#fde047" };
+    return { bg: "#fee2e2", text: "#dc2626", border: "#fca5a5" };
+  }
+
+  return (
+    <div className="select-none" style={{ display: "grid", gridTemplateColumns: "repeat(13, 1fr)", gap: "2px" }}>
+      {RANKS.map((_, row) =>
+        RANKS.map((_, col) => {
+          const hand = getHandLabel(row, col);
+          const cs = comboStats[hand];
+          const { bg, text, border } = getAccuracyColor(cs);
+          return (
+            <div
+              key={hand}
+              title={cs ? `${hand}: ${cs.correct}/${cs.total} (${((cs.correct / cs.total) * 100).toFixed(1)}%)` : hand}
+              style={{ backgroundColor: bg, color: text, border: `1px solid ${border}` }}
+              className="aspect-square flex flex-col items-center justify-center rounded-[2px]"
+            >
+              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "clamp(4px, 0.7vw, 8px)", fontWeight: 700, lineHeight: 1.2 }}>
+                {hand}
+              </span>
+              {cs && (
+                <span style={{ fontSize: "clamp(3px, 0.5vw, 6px)", lineHeight: 1.2, opacity: 0.8 }}>
+                  {cs.correct}/{cs.total}
+                </span>
+              )}
             </div>
           );
         })
@@ -754,14 +811,21 @@ function Trainer({ ranges, actions, drills, onSaveDrill, onDeleteDrill }: Traine
   const [phase, setPhase] = useState<TrainerPhase>("idle");
   const [currentHand, setCurrentHand] = useState<string | null>(null);
   const [userAnswer, setUserAnswer] = useState<string | null>(null);
-  const [stats, setStats] = useState({ correct: 0, total: 0 });
   const [revealGrid, setRevealGrid] = useState(false);
-  const [history, setHistory] = useState<{ hand: string; correct: boolean }[]>([]);
+
+  // Session state
+  const [sessions, setSessions] = useState<SessionData[]>(() => loadSessions());
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [viewingSessionId, setViewingSessionId] = useState<string | null>(null);
 
   const selectedDrill = drills.find((d) => d.id === selectedDrillId) ?? null;
   const selectedRange = selectedDrill ? ranges.find((r) => r.id === selectedDrill.rangeId) ?? null : null;
   const actionMap = Object.fromEntries(actions.map((a) => [a.id, a]));
   const rangeActions = selectedRange ? actions.filter((a) => Object.values(selectedRange.grid).includes(a.id)) : actions;
+  const currentSession = sessions.find((s) => s.id === currentSessionId) ?? null;
+  const viewingSession = sessions.find((s) => s.id === viewingSessionId) ?? null;
+  const activeSession = sessions.find((s) => s.drillId === selectedDrillId && s.endedAt === null) ?? null;
+  const stats = { correct: currentSession?.correct ?? 0, total: currentSession?.total ?? 0 };
   const accuracy = stats.total > 0 ? ((stats.correct / stats.total) * 100).toFixed(1) : null;
   const correctActionId = currentHand && selectedRange ? selectedRange.grid[currentHand] : null;
   const correctAction = correctActionId ? actionMap[correctActionId] : null;
@@ -769,9 +833,16 @@ function Trainer({ ranges, actions, drills, onSaveDrill, onDeleteDrill }: Traine
 
   function selectDrill(drill: Drill) {
     setSelectedDrillId(drill.id);
+    setViewingSessionId(null);
+    const loaded = loadSessions();
+    setSessions(loaded);
+    const active = loaded.find((s) => s.drillId === drill.id && s.endedAt === null);
+    setCurrentSessionId(active?.id ?? null);
     setView("training");
     setPhase("idle");
-    setStats({ correct: 0, total: 0 });
+    setCurrentHand(null);
+    setUserAnswer(null);
+    setRevealGrid(false);
   }
 
   function startNewDrill() {
@@ -791,18 +862,46 @@ function Trainer({ ranges, actions, drills, onSaveDrill, onDeleteDrill }: Traine
   }
 
   function startTraining() {
-    if (!selectedRange) return;
-    setStats({ correct: 0, total: 0 });
-    setHistory([]);
+    if (!selectedDrill || !selectedRange) return;
+    const updated = sessions.map((s) =>
+      s.drillId === selectedDrill.id && s.endedAt === null
+        ? { ...s, endedAt: Date.now() }
+        : s
+    );
+    const newSession: SessionData = {
+      id: `session-${Date.now()}`,
+      drillId: selectedDrill.id,
+      startedAt: Date.now(),
+      endedAt: null,
+      total: 0,
+      correct: 0,
+      history: [],
+      comboStats: {},
+    };
+    const allSessions = [...updated, newSession];
+    setSessions(allSessions);
+    setCurrentSessionId(newSession.id);
+    saveSessions(allSessions);
+    nextHand(selectedRange);
+  }
+
+  function resumeTraining() {
+    if (!selectedRange || !activeSession) return;
+    setPhase("question");
     nextHand(selectedRange);
   }
 
   function stopTraining() {
+    if (!currentSession) return;
+    const updatedSessions = sessions.map((s) =>
+      s.id === currentSession.id ? { ...s, endedAt: Date.now() } : s
+    );
+    setSessions(updatedSessions);
+    setCurrentSessionId(null);
+    saveSessions(updatedSessions);
     setPhase("idle");
     setCurrentHand(null);
     setUserAnswer(null);
-    setStats({ correct: 0, total: 0 });
-    setHistory([]);
     setRevealGrid(false);
   }
 
@@ -815,7 +914,7 @@ function Trainer({ ranges, actions, drills, onSaveDrill, onDeleteDrill }: Traine
   }
 
   function answer(actionId: string) {
-    if (phase !== "question" || !currentHand || !selectedRange) return;
+    if (phase !== "question" || !currentHand || !selectedRange || !currentSession) return;
     const correct = selectedRange.grid[currentHand];
     const isCorrect = actionId === correct;
     setUserAnswer(actionId);
@@ -825,9 +924,38 @@ function Trainer({ ranges, actions, drills, onSaveDrill, onDeleteDrill }: Traine
     } else {
       toast(`Incorrect — ${correctAction?.label ?? correctActionId}`, { icon: <X size={18} className="text-red-500" /> });
     }
-    setHistory((prev) => [{ hand: currentHand, correct: isCorrect }, ...prev]);
-    setStats((prev) => ({ correct: prev.correct + (isCorrect ? 1 : 0), total: prev.total + 1 }));
+    const updatedSessions = sessions.map((s) => {
+      if (s.id !== currentSession.id) return s;
+      const prevCombo = s.comboStats[currentHand] ?? { correct: 0, total: 0 };
+      return {
+        ...s,
+        total: s.total + 1,
+        correct: s.correct + (isCorrect ? 1 : 0),
+        history: [{ hand: currentHand, correct: isCorrect }, ...s.history],
+        comboStats: {
+          ...s.comboStats,
+          [currentHand]: {
+            correct: prevCombo.correct + (isCorrect ? 1 : 0),
+            total: prevCombo.total + 1,
+          },
+        },
+      };
+    });
+    setSessions(updatedSessions);
+    saveSessions(updatedSessions);
     setTimeout(() => nextHand(selectedRange), 1500);
+  }
+
+  function viewSession(sessionId: string) {
+    setViewingSessionId(sessionId);
+  }
+
+  function backToTraining() {
+    setViewingSessionId(null);
+  }
+
+  function formatDate(ts: number) {
+    return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   }
 
   function renderHandCards(hand: string) {
@@ -912,7 +1040,30 @@ function Trainer({ ranges, actions, drills, onSaveDrill, onDeleteDrill }: Traine
         {/* Training section (only when a drill is active) */}
         {selectedDrill && view === "training" && (
           <>
-            {stats.total > 0 && (
+            {/* Active session card (shown when idle and active session exists) */}
+            {activeSession && phase === "idle" && (
+              <div className="bg-card rounded-md border border-border p-3">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Active Session</p>
+                <p className="text-2xl font-bold text-center" style={{
+                  fontFamily: "'JetBrains Mono', monospace",
+                  color: parseFloat(accuracy!) >= 80 ? "#22c55e" : parseFloat(accuracy!) >= 60 ? "#fbbf24" : "#ef4444",
+                }}>
+                  {accuracy}%
+                </p>
+                <p className="text-xs text-muted-foreground text-center">{stats.correct}/{stats.total} correct</p>
+                <div className="flex gap-2 mt-2">
+                  <button onClick={resumeTraining} className="flex-1 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors">
+                    Resume
+                  </button>
+                  <button onClick={stopTraining} className="flex-1 py-1.5 rounded-md bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors">
+                    End
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Live training stats (shown during active training) */}
+            {phase !== "idle" && stats.total > 0 && (
               <div className="bg-card rounded-md border border-border p-3">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Session</p>
                 <p className="text-2xl font-bold text-center" style={{
@@ -925,11 +1076,12 @@ function Trainer({ ranges, actions, drills, onSaveDrill, onDeleteDrill }: Traine
               </div>
             )}
 
-            {history.length > 0 && (
+            {/* History (shown during active training) */}
+            {phase !== "idle" && currentSession && currentSession.history.length > 0 && (
               <div className="flex flex-col gap-1.5">
                 <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">History</span>
                 <div className="flex flex-col gap-1 max-h-40 overflow-y-auto pr-1">
-                  {history.map((entry, i) => (
+                  {currentSession.history.map((entry, i) => (
                     <div key={i} className="flex items-center justify-between">
                       {renderMiniHandCards(entry.hand)}
                       <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${entry.correct ? "bg-green-500" : "bg-red-500"}`} />
@@ -939,12 +1091,14 @@ function Trainer({ ranges, actions, drills, onSaveDrill, onDeleteDrill }: Traine
               </div>
             )}
 
+            {/* End Session button (shown during active training) */}
             {phase !== "idle" && (
               <button onClick={stopTraining} className="flex items-center justify-center gap-2 w-full py-2 rounded-md bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors">
                 <Square size={10} /> End Session
               </button>
             )}
 
+            {/* Range map toggle (shown during training) */}
             {selectedRange && phase !== "idle" && (
               <div className="flex flex-col gap-1.5">
                 <button onClick={() => setRevealGrid((v) => !v)} className="text-[10px] text-muted-foreground hover:text-foreground transition-colors text-left">
@@ -955,6 +1109,42 @@ function Trainer({ ranges, actions, drills, onSaveDrill, onDeleteDrill }: Traine
                 )}
               </div>
             )}
+
+            {/* Past sessions */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Past Sessions</span>
+              {sessions.filter((s) => s.drillId === selectedDrill.id && s.endedAt !== null).length === 0 && (
+                <p className="text-xs text-muted-foreground">No completed sessions yet.</p>
+              )}
+              <div className="flex flex-col gap-1 max-h-48 overflow-y-auto pr-1">
+                {sessions
+                  .filter((s) => s.drillId === selectedDrill.id && s.endedAt !== null)
+                  .sort((a, b) => b.startedAt - a.startedAt)
+                  .map((s) => {
+                    const pct = s.total > 0 ? ((s.correct / s.total) * 100).toFixed(1) : "0.0";
+                    return (
+                      <div
+                        key={s.id}
+                        onClick={() => viewSession(s.id)}
+                        className={`flex items-center justify-between px-3 py-2 rounded-md cursor-pointer transition-colors text-xs ${
+                          viewingSessionId === s.id ? "bg-accent text-accent-foreground" : "hover:bg-secondary text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        <div className="flex flex-col min-w-0">
+                          <span className="font-medium truncate">{formatDate(s.startedAt)}</span>
+                          <span className="text-[10px] opacity-70">{s.total} hands</span>
+                        </div>
+                        <span className="font-bold flex-shrink-0 ml-2" style={{
+                          fontFamily: "'JetBrains Mono', monospace",
+                          color: parseFloat(pct) >= 80 ? "#22c55e" : parseFloat(pct) >= 60 ? "#fbbf24" : "#ef4444",
+                        }}>
+                          {pct}%
+                        </span>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
           </>
         )}
       </aside>
@@ -995,8 +1185,60 @@ function Trainer({ ranges, actions, drills, onSaveDrill, onDeleteDrill }: Traine
           </div>
         )}
 
+        {/* Session detail view */}
+        {view === "training" && selectedDrill && viewingSession && (
+          <div className="flex flex-col gap-6 h-full overflow-y-auto">
+            <button onClick={backToTraining} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors self-start">
+              ← Back to Training
+            </button>
+            <div className="bg-card rounded-xl border border-border p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-lg font-semibold text-foreground">Session Details</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {formatDate(viewingSession.startedAt)} — {viewingSession.endedAt ? formatDate(viewingSession.endedAt) : "In progress"}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-3xl font-bold" style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    color: viewingSession.total > 0 && (viewingSession.correct / viewingSession.total) >= 0.8 ? "#22c55e" : viewingSession.total > 0 && (viewingSession.correct / viewingSession.total) >= 0.6 ? "#fbbf24" : "#ef4444",
+                  }}>
+                    {viewingSession.total > 0 ? ((viewingSession.correct / viewingSession.total) * 100).toFixed(1) : "0.0"}%
+                  </p>
+                  <p className="text-xs text-muted-foreground">{viewingSession.correct}/{viewingSession.total} correct</p>
+                </div>
+              </div>
+              <div className="flex gap-6">
+                <div className="flex-1 min-w-0">
+                  <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Per-Combo Accuracy</h4>
+                  <SessionGrid comboStats={viewingSession.comboStats} />
+                </div>
+                <div className="w-48 flex-shrink-0">
+                  <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Combo Breakdown</h4>
+                  <div className="flex flex-col gap-1 max-h-96 overflow-y-auto">
+                    {Object.entries(viewingSession.comboStats)
+                      .sort(([, a], [, b]) => (b.correct / b.total) - (a.correct / a.total))
+                      .map(([hand, cs]) => {
+                        const pct = (cs.correct / cs.total) * 100;
+                        return (
+                          <div key={hand} className="flex items-center justify-between text-xs py-0.5 px-1 rounded hover:bg-secondary">
+                            <span className="font-mono font-medium">{hand}</span>
+                            <span style={{ color: pct >= 80 ? "#22c55e" : pct >= 60 ? "#ca8a04" : "#dc2626" }}>
+                              {cs.correct}/{cs.total}
+                            </span>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Training view */}
-        {view === "training" && selectedDrill && (
+        {view === "training" && selectedDrill && !viewingSession && (
           <div className="flex flex-col items-center justify-center h-full gap-8">
             {phase === "idle" && (
               <div className="text-center space-y-4">
@@ -1005,9 +1247,30 @@ function Trainer({ ranges, actions, drills, onSaveDrill, onDeleteDrill }: Traine
                     ? "No range configured for this drill. Edit the drill to select a range."
                     : `"${selectedRange.name}" · ${Object.keys(selectedRange.grid).length} hands`}
                 </p>
-                <button onClick={startTraining} disabled={!selectedRange} className="px-6 py-2.5 rounded-md bg-primary text-primary-foreground font-semibold text-sm hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
-                  Start Training
-                </button>
+                {activeSession ? (
+                  <div className="flex flex-col items-center gap-4">
+                    <div className="bg-card rounded-xl border border-border p-5 text-center min-w-60">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">Active Session</p>
+                      <p className="text-4xl font-bold" style={{
+                        fontFamily: "'JetBrains Mono', monospace",
+                        color: parseFloat(accuracy!) >= 80 ? "#22c55e" : parseFloat(accuracy!) >= 60 ? "#fbbf24" : "#ef4444",
+                      }}>
+                        {accuracy}%
+                      </p>
+                      <p className="text-sm text-muted-foreground mt-1">{stats.correct}/{stats.total} correct</p>
+                    </div>
+                    <button onClick={resumeTraining} disabled={!selectedRange} className="px-6 py-2.5 rounded-md bg-primary text-primary-foreground font-semibold text-sm hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                      Resume Current Session
+                    </button>
+                    <button onClick={startTraining} className="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2">
+                      Start New Session
+                    </button>
+                  </div>
+                ) : (
+                  <button onClick={startTraining} disabled={!selectedRange} className="px-6 py-2.5 rounded-md bg-primary text-primary-foreground font-semibold text-sm hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                    Start Training
+                  </button>
+                )}
               </div>
             )}
 
@@ -1058,6 +1321,19 @@ function loadFromStorage(): Partial<AppData> {
 
 function saveToStorage(data: AppData) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch { /* quota */ }
+}
+
+const SESSIONS_KEY = "poker-trainer-sessions";
+
+function loadSessions(): SessionData[] {
+  try {
+    const raw = localStorage.getItem(SESSIONS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function saveSessions(sessions: SessionData[]) {
+  try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions)); } catch { /* quota */ }
 }
 
 // ─── App ──────────────────────────────────────────────────────────────────────
