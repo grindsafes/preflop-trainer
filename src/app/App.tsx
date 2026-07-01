@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
-import { Download, Upload, Plus, Trash2, Pencil, Check, X, ChevronDown, ChevronUp, ChevronRight, Square, Sun, Moon, FolderPlus, Move, EllipsisVertical } from "lucide-react";
+import { Download, Upload, Plus, Trash2, Pencil, Check, X, ChevronDown, ChevronUp, ChevronRight, Square, Sun, Moon, FolderPlus, Move, EllipsisVertical, Copy } from "lucide-react";
 import logoSvg from "./imgs/logo.svg";
 import { DndProvider, useDrag, useDrop } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
@@ -636,6 +636,7 @@ interface BuilderProps {
   rangeFolders: Folder[];
   onSaveRange: (r: Range) => void;
   onDeleteRange: (id: string) => void;
+  onDuplicateRange: (id: string) => void;
   onMoveRange: (id: string, folderId: string | null) => void;
   onNewRangeFolder: (parentId: string | null) => void;
   onRenameRangeFolder: (id: string, name: string) => void;
@@ -643,7 +644,7 @@ interface BuilderProps {
   onMoveFolder: (folderId: string, newParentId: string | null) => void;
 }
 
-function Builder({ ranges, rangeFolders, onSaveRange, onDeleteRange, onMoveRange, onNewRangeFolder, onRenameRangeFolder, onDeleteRangeFolder, onMoveFolder }: BuilderProps) {
+function Builder({ ranges, rangeFolders, onSaveRange, onDeleteRange, onDuplicateRange, onMoveRange, onNewRangeFolder, onRenameRangeFolder, onDeleteRangeFolder, onMoveFolder }: BuilderProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [rangeName, setRangeName] = useState("New Range");
   const [grid, setGrid] = useState<Record<string, string>>({});
@@ -710,6 +711,7 @@ function Builder({ ranges, rangeFolders, onSaveRange, onDeleteRange, onMoveRange
             onRenameFolder={onRenameRangeFolder}
             selectedItemId={editingId}
             onSelectItem={(item) => { const r = ranges.find((x) => x.id === item.id); if (r) loadRange(r); }}
+            onDuplicateItem={onDuplicateRange}
             onDeleteItem={(id) => { onDeleteRange(id); if (editingId === id) newRange(); }}
             renderItem={(item) => {
               const sel = item.id === editingId;
@@ -1363,6 +1365,7 @@ function FolderTree({
   renderItem,
   onEditItem,
   onDeleteItem,
+  onDuplicateItem,
   selectedItemId,
   emptyMessage = "No items yet",
 }: {
@@ -1377,6 +1380,7 @@ function FolderTree({
   renderItem: (item: { id: string; name: string; folderId: string | null }) => React.ReactNode;
   onEditItem?: (itemId: string) => void;
   onDeleteItem?: (itemId: string) => void;
+  onDuplicateItem?: (itemId: string) => void;
   selectedItemId?: string;
   emptyMessage?: string;
 }) {
@@ -1449,6 +1453,7 @@ function FolderTree({
           renderItem={renderItem}
           onEditItem={onEditItem}
           onDeleteItem={onDeleteItem}
+          onDuplicateItem={onDuplicateItem}
           selectedItemId={selectedItemId}
         />
       ))}
@@ -1464,6 +1469,7 @@ function FolderTree({
             allFolders={allFolders}
             onEditItem={onEditItem}
             onDeleteItem={onDeleteItem}
+            onDuplicateItem={onDuplicateItem}
             selectedItemId={selectedItemId}
           />
         ))}
@@ -1480,7 +1486,7 @@ function FolderNode({
   renamingId, renameValue,
   onToggleFolder, onRenameChange, onCommitRename, onCancelRename, onStartRename,
   onMoveItem, onMoveFolder, onDeleteFolder, onSelectItem, renderItem,
-  onEditItem, onDeleteItem, selectedItemId,
+  onEditItem, onDeleteItem, onDuplicateItem, selectedItemId,
 }: {
   folder: Folder; depth: number;
   items: { id: string; name: string; folderId: string | null }[];
@@ -1500,6 +1506,7 @@ function FolderNode({
   renderItem: (item: { id: string; name: string; folderId: string | null }) => React.ReactNode;
   onEditItem?: (itemId: string) => void;
   onDeleteItem?: (itemId: string) => void;
+  onDuplicateItem?: (itemId: string) => void;
   selectedItemId?: string;
 }) {
   const isExpanded = expandedFolders.has(folder.id);
@@ -1632,6 +1639,7 @@ function FolderNode({
               renderItem={renderItem}
               onEditItem={onEditItem}
               onDeleteItem={onDeleteItem}
+              onDuplicateItem={onDuplicateItem}
               selectedItemId={selectedItemId}
             />
           ))}
@@ -1646,6 +1654,7 @@ function FolderNode({
               allFolders={allFolders}
               onEditItem={onEditItem}
               onDeleteItem={onDeleteItem}
+              onDuplicateItem={onDuplicateItem}
               selectedItemId={selectedItemId}
             />
           ))}
@@ -1660,7 +1669,7 @@ function FolderNode({
 
 function ItemNode({
   item, depth, onSelectItem, renderItem, onMoveItem, allFolders,
-  onEditItem, onDeleteItem, selectedItemId,
+  onEditItem, onDeleteItem, onDuplicateItem, selectedItemId,
 }: {
   item: { id: string; name: string; folderId: string | null };
   depth: number;
@@ -1670,6 +1679,7 @@ function ItemNode({
   allFolders: Folder[];
   onEditItem?: (itemId: string) => void;
   onDeleteItem?: (itemId: string) => void;
+  onDuplicateItem?: (itemId: string) => void;
   selectedItemId?: string;
 }) {
   const [{ isDragging }, dragRef] = useDrag(() => ({
@@ -1729,7 +1739,16 @@ function ItemNode({
               <span className="truncate">{dest.name}</span>
             </button>
           ))}
-          {(onEditItem || onDeleteItem) && <div className="h-px bg-border my-1" />}
+          {(onDuplicateItem || onEditItem || onDeleteItem) && <div className="h-px bg-border my-1" />}
+          {onDuplicateItem && (
+            <button
+              onClick={() => { onDuplicateItem(item.id); setMovePopoverOpen(false); }}
+              className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-left rounded hover:bg-secondary transition-colors"
+            >
+              <Copy size={12} className="text-muted-foreground flex-shrink-0" />
+              <span>Duplicate</span>
+            </button>
+          )}
           {onEditItem && (
             <button
               onClick={() => { onEditItem(item.id); setMovePopoverOpen(false); }}
@@ -1814,6 +1833,12 @@ export default function App() {
 
   function deleteRange(id: string) {
     setRanges((p) => p.filter((r) => r.id !== id));
+  }
+
+  function duplicateRange(id: string) {
+    const source = ranges.find((r) => r.id === id);
+    if (!source) return;
+    setRanges((prev) => [...prev, { ...source, id: `range-${Date.now()}`, name: `${source.name} (copy)` }]);
   }
 
   function deleteDrill(id: string) {
@@ -1940,7 +1965,7 @@ export default function App() {
 
         <main className="flex-1 overflow-hidden p-5">
           {tab === "builder" ? (
-            <Builder ranges={ranges} rangeFolders={rangeFolders} onSaveRange={saveRange} onDeleteRange={deleteRange} onMoveRange={moveRange} onMoveFolder={moveRangeFolder} onNewRangeFolder={newRangeFolder} onRenameRangeFolder={renameRangeFolder} onDeleteRangeFolder={deleteRangeFolder} />
+            <Builder ranges={ranges} rangeFolders={rangeFolders} onSaveRange={saveRange} onDeleteRange={deleteRange} onDuplicateRange={duplicateRange} onMoveRange={moveRange} onMoveFolder={moveRangeFolder} onNewRangeFolder={newRangeFolder} onRenameRangeFolder={renameRangeFolder} onDeleteRangeFolder={deleteRangeFolder} />
           ) : (
             <Trainer ranges={ranges} drills={drills} drillFolders={drillFolders} onSaveDrill={saveDrill} onDeleteDrill={deleteDrill} onMoveDrill={moveDrill} onMoveFolder={moveDrillFolder} onNewDrillFolder={newDrillFolder} onRenameDrillFolder={renameDrillFolder} onDeleteDrillFolder={deleteDrillFolder} />
           )}
