@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { Download, Upload, Plus, Trash2, Pencil, Check, X, ChevronDown, ChevronUp, Square, Sun, Moon } from "lucide-react";
+import logoSvg from "./imgs/logo.svg";
 
 
 // ─── Position constants ───────────────────────────────────────────────────────
@@ -1395,10 +1396,9 @@ export default function App() {
   return (
     <div className="w-full h-screen flex flex-col overflow-hidden bg-background text-foreground" style={{ fontFamily: "'Inter', sans-serif" }}>
       <header className="flex-shrink-0 border-b border-border px-6 py-3 flex items-center gap-6">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-md flex items-center justify-center text-sm" style={{ backgroundColor: "var(--primary)", border: "1px solid var(--primary)" }}>♠</div>
-          <span className="font-semibold text-foreground text-sm tracking-tight">GrindSafe Trainer</span>
-          <a href="https://github.com/grindsafes/preflop-trainer" target="_blank" rel="noopener noreferrer"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/grindsafes/preflop-trainer" className="h-5" /></a>
+          <div className="flex items-center gap-2.5">
+            <img src={logoSvg as string} alt="GrindSafe Trainer" className="h-[22px]" />
+            <a href="https://github.com/grindsafes/preflop-trainer" target="_blank" rel="noopener noreferrer"><img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/grindsafes/preflop-trainer" className="h-5" /></a>
         </div>
         <nav className="flex gap-1">
           {(["builder", "trainer"] as const).map((t) => (
