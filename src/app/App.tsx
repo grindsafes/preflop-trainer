@@ -963,7 +963,8 @@ function Trainer({ ranges, drills, drillFolders, onSaveDrill, onDeleteDrill, onM
   }
 
   function nextHand(range: Range) {
-    const hands = Object.keys(range.grid);
+    const validActionIds = new Set(range.actions.map(a => a.id));
+    const hands = Object.keys(range.grid).filter(h => validActionIds.has(range.grid[h]));
     if (hands.length === 0) {
       setCurrentHand(null);
       setPhase("idle");
