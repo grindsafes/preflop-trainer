@@ -1538,7 +1538,7 @@ function FolderNode({
     <div ref={dropRef} className={`transition-colors rounded-sm ${isOver ? "bg-white/20" : ""}`}>
       <div
         className="flex items-center gap-1 py-2 rounded-md hover:bg-secondary cursor-pointer group"
-        style={{ paddingLeft: `${depth * 16}px` }}
+      style={{ paddingLeft: `${depth * 16}px` }}
         onClick={() => onToggleFolder(folder.id)}
       >
         {isExpanded ? <ChevronDown size={12} className="text-muted-foreground flex-shrink-0" /> : <ChevronRight size={12} className="text-muted-foreground flex-shrink-0" />}
@@ -1692,7 +1692,7 @@ function ItemNode({
     <div
       ref={dragRef}
       className={`flex items-center py-2 rounded-md cursor-pointer transition-colors group ${isSelected ? "bg-secondary text-foreground pr-3" : "hover:bg-secondary"} ${isDragging ? "opacity-40" : ""}`}
-      style={{ paddingLeft: `${depth * 16}px` }}
+      style={{ paddingLeft: `${depth * 16 + (isSelected && depth === 0 ? 12 : 0)}px` }}
       onClick={() => onSelectItem(item)}
     >
       <div className="flex-1 min-w-0">
