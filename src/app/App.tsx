@@ -2064,7 +2064,7 @@ export default function App() {
       <div className="w-full h-dvh flex flex-col overflow-hidden overscroll-y-contain bg-background text-foreground" style={{ fontFamily: "'Inter', sans-serif" }}>
         <header className="flex-shrink-0 border-b border-border px-6 py-3 flex items-center gap-6">
             <div className="flex items-center gap-2.5">
-              <img src={logoSvg as string} alt="GrindSafe Trainer" className="h-[22px]" />
+              <img src={theme === "dark" ? "/grindsafe-logo-dark.svg" : (logoSvg as string)} alt="GrindSafe Trainer" className="h-[22px]" />
           </div>
           <nav className="flex gap-1">
             {(["community", "builder", "trainer"] as const).map((t) => (
