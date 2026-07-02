@@ -17,4 +17,3 @@ Your charts, drills and progress are stored there, you can regularly export your
 ## Installing
 
 Once you have cloned the project, you can go ahead and run `npm install` to install our dependencies and to start the the UI you can run `npm run dev`.
-  
