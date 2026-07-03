@@ -139,10 +139,10 @@ export function PokerTable({ positions, heroPosition, onSelectHero, compact = fa
                         </clipPath>
                       </defs>
                       {isHero && (
-                        <circle cx={x} cy={avatarCy} r={avatarR + 4}
-                          fill="white" opacity={0.35}
+                        <circle key={`glow-${heroHand || ''}-${flippingOut}`} cx={x} cy={avatarCy} r={avatarR + 4}
+                          fill="white"
                           filter="url(#hero-glow)"
-                          className="hero-pulse"
+                          className={`hero-pulse ${flippingOut ? "glow-fade-out" : ""}`}
                         />
                       )}
                       <image href={POSITION_IMAGES[pos]}
@@ -248,10 +248,18 @@ export function PokerTable({ positions, heroPosition, onSelectHero, compact = fa
         .seat-hover { transition: fill-opacity 0.15s; }
 
         @keyframes heroPulse {
-          0%, 100% { opacity: 0.15; }
+          0% { opacity: 0; }
+          20% { opacity: 0.35; }
           50% { opacity: 0.5; }
+          80% { opacity: 0.15; }
+          100% { opacity: 0; }
+        }
+        @keyframes glowFadeOut {
+          0% { opacity: 0.35; }
+          100% { opacity: 0; }
         }
         .hero-pulse { animation: heroPulse 2s ease-in-out infinite; }
+        .glow-fade-out { animation: glowFadeOut 0.35s ease-in forwards !important; }
       `}</style>
     </svg>
   );
