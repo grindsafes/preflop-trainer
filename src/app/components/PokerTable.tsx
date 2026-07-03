@@ -63,9 +63,9 @@ export function PokerTable({ positions, heroPosition, onSelectHero, compact = fa
     >
       <defs>
         <pattern id="card-back" width="8" height="8" patternUnits="userSpaceOnUse">
-          <rect width="8" height="8" fill="#1a1a2e" />
-          <rect width="4" height="4" fill="#e8eaed" />
-          <rect x="4" y="4" width="4" height="4" fill="#e8eaed" />
+          <rect width="8" height="8" fill="var(--foreground)" />
+          <rect width="4" height="4" fill="var(--card)" />
+          <rect x="4" y="4" width="4" height="4" fill="var(--card)" />
         </pattern>
         <filter id="hero-glow" x="-50%" y="-50%" width="200%" height="200%">
           <feGaussianBlur in="SourceGraphic" stdDeviation="4" />
@@ -159,7 +159,7 @@ export function PokerTable({ positions, heroPosition, onSelectHero, compact = fa
                       {isHero && heroHand && renderHeroCards(heroHand, x, bodyTop - 2)}
                       <rect x={x - bodyW / 2} y={bodyTop} width={bodyW} height={bodyH} rx={8}
                         fill="var(--card)"
-                        stroke={isHero ? "#6b7280" : "var(--border)"}
+                        stroke={isHero ? "var(--muted-foreground)" : "var(--border)"}
                         strokeWidth={1}
                       />
                       <text x={x} y={bodyTop + 11}
