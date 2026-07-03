@@ -32,6 +32,7 @@ export function PokerTable({ positions, heroPosition, onSelectHero, compact = fa
             <g className={flippingOut ? "front-flip-out" : "front-flip-in"}
               style={{ animationDelay: flippingOut ? "0s" : delay }}>
               <rect x={startX + i * (cw + gap)} y={cy - ch / 2} width={cw} height={ch} rx={5} style={{ fill: colors[i], stroke: "var(--border)" }} strokeWidth={1} />
+              <rect x={startX + i * (cw + gap) + 2} y={cy - ch / 2 + 2} width={cw - 4} height={ch - 4} rx={3} fill="none" stroke="white" strokeWidth={1} />
               <text x={startX + i * (cw + gap) + cw / 2} y={cy - 7} textAnchor="middle" dominantBaseline="middle" fill="white" fontSize={16} fontWeight={700} fontFamily="JetBrains Mono, monospace">
                 {ranks[i]}
               </text>
