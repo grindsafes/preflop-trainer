@@ -39,6 +39,7 @@ export interface LineNodeData {
   actionType?: 'check' | 'bet' | 'raise' | 'fold' | 'call' | 'allin';
   betSize?: string;
   correct?: boolean;
+  weight?: number;
   stats?: { total: number; correct: number };
   boardCards?: string;
 }
@@ -99,4 +100,5 @@ export interface LineSessionData {
   correct: number;
   history: { nodeId: string; nodeLabel: string; correct: boolean; boardCards?: string }[];
   usedFlopNodeIds?: string[];
+  pathStats?: Record<string, { total: number; correct: number; pathLabels: string[] }>;
 }

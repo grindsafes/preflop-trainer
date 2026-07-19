@@ -150,6 +150,22 @@ export const ActionNode = memo(({ id, data, selected }: NodeProps<LineNodeData>)
             <span className="text-[9px] text-muted-foreground">Correct</span>
           </label>
         )}
+        {data.actor === "villain" && (
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-muted-foreground font-mono flex-shrink-0">Weight</span>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={data.weight ?? ""}
+              onChange={(e) => updateNodeData(id, { weight: e.target.value === "" ? undefined : Number(e.target.value) })}
+              onPointerDown={stopPropagation}
+              placeholder="50"
+              className="flex-1 text-[10px] rounded px-1.5 py-1 border font-mono bg-background text-foreground border-border focus:outline-none focus:ring-1 focus:ring-primary w-14"
+            />
+            <span className="text-[10px] text-muted-foreground">%</span>
+          </div>
+        )}
       </div>
       <Handle type="source" position={Position.Bottom} className="!bg-border" />
     </div>

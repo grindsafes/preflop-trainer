@@ -12,6 +12,7 @@ import { FolderTree } from "../components/FolderTree";
 import { DrillEditor } from "../components/DrillEditor";
 import { LineDrillEditor } from "../components/LineDrillEditor";
 import { Drawer, DrawerTrigger, DrawerContent, DrawerHeader, DrawerTitle } from "../components/ui/drawer";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "../components/ui/table";
 import type { Node, Edge } from "@xyflow/react";
 import type { Drill, Range, SessionData, LineTree, LineNodeData, LineSessionData, LineDrill } from "../types";
 
@@ -43,7 +44,7 @@ export default function Trainer() {
   const [paths, setPaths] = useState<string[][]>([]);
   const [currentPathIndex, setCurrentPathIndex] = useState(0);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [villainAction, setVillainAction] = useState<{ label: string } | null>(null);
+  const [villainAction, setVillainAction] = useState<{ label: string; betSize?: string } | null>(null);
   const villainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lineAnswerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -175,16 +176,50 @@ export default function Trainer() {
     const isVillain = nonStreetChildren.length > 0 && nonStreetChildren.every(c => c.data.actor === 'villain');
 
     if (isVillain) {
-      const correctChild = nonStreetChildren.find(n => n.data.correct) ?? nonStreetChildren[0];
-      if (!correctChild) return;
+      const hasWeights = nonStreetChildren.some(c => c.data.weight !== undefined && c.data.weight > 0);
 
-      const label = correctChild.data.actionType
-        ? correctChild.data.actionType.charAt(0).toUpperCase() + correctChild.data.actionType.slice(1)
-        : correctChild.data.label;
-      setVillainAction({ label });
+      let selectedChild: Node<LineNodeData>;
+      if (hasWeights) {
+        selectedChild = weightedRandomSelect(nonStreetChildren);
+      } else {
+        selectedChild = nonStreetChildren.find(n => n.data.correct) ?? nonStreetChildren[0];
+      }
+      if (!selectedChild) return;
 
-      const nextStep = currentStepIndex + 1;
-      const isLastStep = nextStep >= (paths[currentPathIndex]?.length ?? 0);
+      let advancePathIdx = currentPathIndex;
+      let advanceStepIdx = currentStepIndex;
+      const currentPath = paths[currentPathIndex];
+      if (currentPath) {
+        const parentPos = currentPath.indexOf(currentPathNodeId);
+        if (parentPos >= 0) {
+          const expectedChild = currentPath[parentPos + 1];
+          if (expectedChild !== selectedChild.id) {
+            const newPathIdx = findPathContainingEdge(currentPathNodeId, selectedChild.id);
+            if (newPathIdx >= 0) {
+              advancePathIdx = newPathIdx;
+              const childPos = paths[newPathIdx].indexOf(selectedChild.id);
+              if (childPos >= 0) {
+                advanceStepIdx = childPos;
+              }
+            }
+          }
+        }
+      }
+
+      const label = selectedChild.data.actionType
+        ? selectedChild.data.actionType.charAt(0).toUpperCase() + selectedChild.data.actionType.slice(1)
+        : selectedChild.data.label;
+      setVillainAction({ label, betSize: selectedChild.data.betSize });
+
+      if (advancePathIdx !== currentPathIndex) {
+        setCurrentPathIndex(advancePathIdx);
+      }
+      if (advanceStepIdx !== currentStepIndex) {
+        setCurrentStepIndex(advanceStepIdx);
+      }
+
+      const nextStep = advanceStepIdx + 1;
+      const isLastStep = nextStep >= (paths[advancePathIdx]?.length ?? 0);
 
       villainTimerRef.current = setTimeout(() => {
         setVillainAction(null);
@@ -403,6 +438,46 @@ export default function Trainer() {
 
   function findCorrectChild(parentId: string): Node<LineNodeData> | null {
     return getOrderedChildren(parentId).find((n) => n.data.correct) ?? null;
+  }
+
+  function findPathContainingEdge(parentId: string, childId: string): number {
+    return paths.findIndex(p => {
+      for (let j = 0; j < p.length - 1; j++) {
+        if (p[j] === parentId && p[j + 1] === childId) return true;
+      }
+      return false;
+    });
+  }
+
+  function weightedRandomSelect(children: Node<LineNodeData>[]): Node<LineNodeData> {
+    const weights = children.map(c => c.data.weight ?? 1);
+    const totalWeight = weights.reduce((sum, w) => sum + Math.max(0, w), 0);
+    if (totalWeight <= 0) {
+      return children[Math.floor(Math.random() * children.length)];
+    }
+    let rand = Math.random() * totalWeight;
+    for (let i = 0; i < children.length; i++) {
+      rand -= Math.max(0, weights[i]);
+      if (rand <= 0) return children[i];
+    }
+    return children[children.length - 1];
+  }
+
+  function getPathLabels(path: string[]): string[] {
+    return path.map(nodeId => {
+      const n = lineTreeNodes.find(nd => nd.id === nodeId);
+      if (!n) return "?";
+      if (n.data.actionType) {
+        let label = n.data.actionType.charAt(0).toUpperCase() + n.data.actionType.slice(1);
+        if (n.data.betSize) label += ` ${n.data.betSize}`;
+        return label;
+      }
+      return n.data.label || n.data.nodeType || "?";
+    });
+  }
+
+  function getPathKey(path: string[]): string {
+    return path.join("|");
   }
 
   function generatePaths(nodes: Node<LineNodeData>[], edges: Edge[]): string[][] {
@@ -657,13 +732,28 @@ export default function Trainer() {
     });
     setLineTreeNodes(updatedNodes);
 
+    const currentPath = paths[currentPathIndex]?.slice(0, currentStepIndex + 2) ?? [];
+    const pathKey = currentPath.length >= 2 ? getPathKey(currentPath) : "";
+    const pathLabels = currentPath.length >= 2 ? getPathLabels(currentPath) : [];
+
     const updatedSessions = lineSessions.map((s) => {
       if (s.id !== currentLineSession.id) return s;
+      const prevPathStats = s.pathStats ?? {};
+      const prevPath = pathKey ? (prevPathStats[pathKey] ?? { total: 0, correct: 0, pathLabels }) : null;
+      const newPathStats = pathKey ? {
+        ...prevPathStats,
+        [pathKey]: {
+          total: (prevPath?.total ?? 0) + 1,
+          correct: (prevPath?.correct ?? 0) + (isCorrect ? 1 : 0),
+          pathLabels,
+        },
+      } : prevPathStats;
       return {
         ...s,
         total: s.total + 1,
         correct: s.correct + (isCorrect ? 1 : 0),
         history: [{ nodeId, nodeLabel: clicked.data.actionType ?? "", correct: isCorrect, boardCards: boardCards }, ...s.history],
+        pathStats: newPathStats,
       };
     });
     setLineSessions(updatedSessions);
@@ -1180,55 +1270,58 @@ export default function Trainer() {
                 </button>
               </div>
 
-              <div className="bg-card rounded-xl border border-border p-4 lg:p-6 flex flex-col items-center justify-center flex-1 min-h-[200px] gap-4">
-                {lineRootNode && (
-                  <div className="text-center">
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Scenario</p>
-                    <p className="text-lg font-semibold">{lineRootNode.data.label}</p>
-                  </div>
-                )}
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-muted-foreground">Position</span>
-                  <span className="text-xs px-3 py-1 rounded-full bg-secondary text-foreground font-medium">{selectedLineDrill.heroPosition}</span>
-                </div>
-              </div>
-
-              <div className="bg-card rounded-xl border border-border p-4">
-                <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Node Accuracy Overview</h3>
+              <div className="bg-card rounded-xl border border-border p-4 flex-1">
+                <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Path Accuracy</h3>
                 {(() => {
-                  const correctNodes = lineTreeNodes.filter((n) => n.data.correct);
-                  if (correctNodes.length === 0) {
-                    return <p className="text-xs text-muted-foreground">No correct nodes marked in this line tree.</p>;
+                  const selectedDrillSessions = lineSessions
+                    .filter((s) => s.lineDrillId === selectedLineDrill.id && s.endedAt !== null);
+                  const aggregatedPathStats: Record<string, { total: number; correct: number; pathLabels: string[] }> = {};
+                  for (const session of selectedDrillSessions) {
+                    if (!session.pathStats) continue;
+                    for (const [key, ps] of Object.entries(session.pathStats)) {
+                      const existing = aggregatedPathStats[key];
+                      if (existing) {
+                        existing.total += ps.total;
+                        existing.correct += ps.correct;
+                      } else {
+                        aggregatedPathStats[key] = { ...ps };
+                      }
+                    }
                   }
-                  const allStats = correctNodes
-                    .map((n) => ({ label: n.data.actionType ?? "?", stats: n.data.stats ?? { total: 0, correct: 0 } }))
-                    .filter((s) => s.stats.total > 0);
-                  if (allStats.length === 0) {
+                  const entries = Object.entries(aggregatedPathStats)
+                    .sort((a, b) => (a[1].correct / a[1].total) - (b[1].correct / b[1].total));
+                  if (entries.length === 0) {
                     return <p className="text-xs text-muted-foreground">No training data yet.</p>;
                   }
-                  const avg = allStats.reduce((s, n) => s + (n.stats.correct / n.stats.total), 0) / allStats.length;
                   return (
-                    <div className="space-y-2">
-                      <p className="text-2xl font-bold text-center" style={{
-                        fontFamily: "'JetBrains Mono', monospace",
-                        color: avg >= 0.8 ? "#22c55e" : avg >= 0.6 ? "#fbbf24" : "#ef4444",
-                      }}>
-                        {(avg * 100).toFixed(1)}%
-                      </p>
-                      <div className="flex flex-col gap-1">
-                        {allStats.map((s, i) => (
-                          <div key={i} className="flex items-center justify-between text-xs py-0.5 px-1 rounded hover:bg-secondary">
-                            <span className="font-medium">{s.label}</span>
-                            <span style={{
-                              fontFamily: "'JetBrains Mono', monospace",
-                              color: (s.stats.correct / s.stats.total) >= 0.8 ? "#22c55e" : (s.stats.correct / s.stats.total) >= 0.6 ? "#fbbf24" : "#ef4444",
-                            }}>
-                              {s.stats.correct}/{s.stats.total}
-                            </span>
-                          </div>
-                        ))}
+                    <div className="max-h-60 overflow-y-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="text-[10px]">Path</TableHead>
+                              <TableHead className="text-[10px] text-right">%</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {entries.map(([key, ps]) => {
+                              const pct = (ps.correct / ps.total) * 100;
+                              const desc = ps.pathLabels.length >= 2
+                                ? ps.pathLabels.slice(1).join(" → ")
+                                : "Unknown path";
+                              return (
+                                <TableRow key={key}>
+                                  <TableCell className="truncate max-w-[200px] font-medium" title={desc}>{desc}</TableCell>
+                                  <TableCell className="text-right font-mono font-medium" style={{
+                                    color: pct >= 80 ? "#22c55e" : pct >= 60 ? "#fbbf24" : "#ef4444",
+                                  }}>
+                                    {pct.toFixed(0)}%
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
                       </div>
-                    </div>
                   );
                 })()}
               </div>
@@ -1299,91 +1392,60 @@ export default function Trainer() {
 
         {view === "line-drill-training" && selectedLineDrill && currentLineSession && (
           <div className="flex flex-col lg:flex-row gap-4 lg:gap-6 h-full">
-            <div className="flex-1 lg:flex-[7] flex flex-col items-center gap-4 lg:gap-6 min-w-0">
+            <div className="flex-1 lg:flex-[7] flex flex-col items-center gap-4 lg:gap-6 min-w-0 h-full">
               {currentNode && heroActions.length > 0 ? (
-                <>
-                  <div className="w-full max-w-4xl flex items-center gap-2 flex-wrap">
-                    {lineRootNode && (
-                      <span className="text-sm font-semibold text-foreground">{lineRootNode.data.label}</span>
-                    )}
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-secondary text-muted-foreground font-medium">
-                      {selectedLineDrill.heroPosition}
-                    </span>
-                    {currentNode.data.street && (
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-secondary text-muted-foreground font-medium">
-                        {currentNode.data.street.charAt(0).toUpperCase() + currentNode.data.street.slice(1)}
-                      </span>
-                    )}
-                    {currentPathIndex >= 0 && paths[currentPathIndex] && (
-                      <div className="flex items-center gap-1 text-[10px] text-muted-foreground ml-auto truncate max-w-[200px] sm:max-w-none">
-                        {paths[currentPathIndex].slice(1, currentStepIndex + 1).map((nodeId, i, arr) => {
-                          const n = lineTreeNodes.find(nd => nd.id === nodeId);
-                          if (!n) return null;
-                          const label = n.data.actionType
-                            ? n.data.actionType.charAt(0).toUpperCase() + n.data.actionType.slice(1)
-                            : n.data.label;
-                          return (
-                            <span key={nodeId} className="inline-flex items-center gap-1">
-                              {i > 0 && <span className="text-muted-foreground/50">→</span>}
-                              <span className={`font-medium ${i === arr.length - 1 ? "text-foreground" : "text-muted-foreground"}`}>{label}</span>
-                            </span>
-                          );
-                        })}
+                <div className="flex-1 flex flex-col items-center justify-center gap-2 lg:gap-3 min-h-0 w-full max-w-4xl">
+                    <div className="w-full max-w-4xl">
+                      <PokerTable
+                        positions={["BU", "BB"]}
+                        heroPosition={selectedLineDrill.heroPosition}
+                        boardCards={boardCards}
+                        betSizes={betSizes}
+                      />
+                    </div>
+
+                    {isVillainTurn ? (
+                      <div className="w-full max-w-lg text-center py-4">
+                        <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                          <span className="inline-block w-2 h-2 rounded-full bg-muted-foreground/50 animate-pulse" />
+                          Villain {villainAction?.label ?? "acting"}{villainAction?.betSize ? ` ${villainAction.betSize}` : ""}...
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="w-full max-w-lg">
+                        <p className="text-xs text-muted-foreground mb-2 text-center">Your action:</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          {heroActions.map((child) => {
+                            const isCorrect = currentCorrectChild?.id === child.id;
+                            const wasWrong = lineAnswer === child.id && !isCorrect;
+                            const wasRight = lineAnswer === child.id && isCorrect;
+                            let btnClass = "py-3 rounded-lg border-2 font-semibold text-xs sm:text-sm transition-all truncate px-3 ";
+                            if (wasRight) btnClass += "border-green-500 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300";
+                            else if (wasWrong) btnClass += "border-red-500 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300";
+                            else if (lineAnswer && isCorrect) btnClass += "border-green-500 bg-green-100/50 dark:bg-green-900/20 text-green-700 dark:text-green-300 opacity-60";
+                            else btnClass += "border-border bg-card text-foreground hover:bg-secondary";
+                            return (
+                              <button
+                                key={child.id}
+                                onClick={() => lineAnswerAction(child.id)}
+                                disabled={lineAnswer !== null}
+                                className={btnClass}
+                              >
+                                {child.data.actionType ? (
+                                  <span className="flex flex-col items-center gap-0.5">
+                                    <span>{child.data.actionType.charAt(0).toUpperCase() + child.data.actionType.slice(1)}</span>
+                                    {child.data.betSize && (
+                                      <span className="text-[10px] opacity-70 font-mono">{child.data.betSize}</span>
+                                    )}
+                                  </span>
+                                ) : child.data.label}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                     )}
                   </div>
-
-                  <div className="w-full max-w-4xl">
-                    <PokerTable
-                      positions={["BU", "BB"]}
-                      heroPosition={selectedLineDrill.heroPosition}
-                      boardCards={boardCards}
-                      betSizes={betSizes}
-                    />
-                  </div>
-
-                  {isVillainTurn ? (
-                    <div className="w-full max-w-lg text-center py-4">
-                      <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
-                        <span className="inline-block w-2 h-2 rounded-full bg-muted-foreground/50 animate-pulse" />
-                        Villain {villainAction?.label ?? "acting"}...
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="w-full max-w-lg">
-                      <p className="text-xs text-muted-foreground mb-2 text-center">Your action:</p>
-                      <div className="grid grid-cols-2 gap-2">
-                        {heroActions.map((child) => {
-                          const isCorrect = currentCorrectChild?.id === child.id;
-                          const wasWrong = lineAnswer === child.id && !isCorrect;
-                          const wasRight = lineAnswer === child.id && isCorrect;
-                          let btnClass = "py-3 rounded-lg border-2 font-semibold text-xs sm:text-sm transition-all truncate px-3 ";
-                          if (wasRight) btnClass += "border-green-500 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300";
-                          else if (wasWrong) btnClass += "border-red-500 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300";
-                          else if (lineAnswer && isCorrect) btnClass += "border-green-500 bg-green-100/50 dark:bg-green-900/20 text-green-700 dark:text-green-300 opacity-60";
-                          else btnClass += "border-border bg-card text-foreground hover:bg-secondary";
-                          return (
-                            <button
-                              key={child.id}
-                              onClick={() => lineAnswerAction(child.id)}
-                              disabled={lineAnswer !== null}
-                              className={btnClass}
-                            >
-                              {child.data.actionType ? (
-                                <span className="flex flex-col items-center gap-0.5">
-                                  <span>{child.data.actionType.charAt(0).toUpperCase() + child.data.actionType.slice(1)}</span>
-                                  {child.data.betSize && (
-                                    <span className="text-[10px] opacity-70 font-mono">{child.data.betSize}</span>
-                                  )}
-                                </span>
-                              ) : child.data.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </>
               ) : (
                 <div className="flex-1 flex flex-col items-center justify-center text-center space-y-4">
                   <p className="text-base font-semibold text-foreground">
@@ -1401,19 +1463,47 @@ export default function Trainer() {
               )}
             </div>
 
-            <div className="flex-1 lg:flex-[3] flex flex-col gap-3 lg:gap-4 min-w-0">
-              <div className="bg-card rounded-xl border border-border p-4 text-center">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">Session Accuracy</p>
-                <p className="text-2xl lg:text-3xl font-bold" style={{
-                  fontFamily: "'JetBrains Mono', monospace",
-                  color: lineAccuracy ? (parseFloat(lineAccuracy) >= 80 ? "#22c55e" : parseFloat(lineAccuracy) >= 60 ? "#fbbf24" : "#ef4444") : "var(--muted-foreground)",
-                }}>
-                  {lineAccuracy ?? "0.0"}%
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">{lineStats.correct}/{lineStats.total} correct</p>
-              </div>
+            <div className="flex-1 lg:flex-[3] flex flex-col gap-2 min-w-0">
+              {currentLineSession?.pathStats && Object.keys(currentLineSession.pathStats).length > 0 && (
+                <div className="bg-card rounded-xl border border-border p-4 flex-1 flex flex-col min-h-0">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 flex-shrink-0">Path Accuracy</p>
+                  <div className="overflow-y-auto flex-1 min-h-0">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="text-[10px]">Path</TableHead>
+                          <TableHead className="text-[10px] text-right">%</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(() => {
+                          const entries = Object.entries(currentLineSession.pathStats!)
+                            .sort((a, b) => (a[1].correct / a[1].total) - (b[1].correct / b[1].total));
+                          return entries.map(([key, ps]) => {
+                            const pct = (ps.correct / ps.total) * 100;
+                            const desc = ps.pathLabels.length >= 2
+                              ? ps.pathLabels.slice(1).join(" → ")
+                              : "Unknown path";
+                            const isCurrentPath = key === getPathKey(paths[currentPathIndex] ?? []);
+                            return (
+                              <TableRow key={key} data-state={isCurrentPath ? "selected" : undefined}>
+                                <TableCell className="truncate max-w-[160px] font-medium" title={desc}>{desc}</TableCell>
+                                <TableCell className="text-right font-mono font-medium" style={{
+                                  color: pct >= 80 ? "#22c55e" : pct >= 60 ? "#fbbf24" : "#ef4444",
+                                }}>
+                                  {pct.toFixed(0)}%
+                                </TableCell>
+                              </TableRow>
+                            );
+                          });
+                        })()}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  </div>
+                )}
 
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-2 flex-shrink-0">
                 {currentLineSession && currentLineSession.history.length > 0 && (
                   <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto">
                     <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">History</span>
