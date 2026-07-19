@@ -56,6 +56,12 @@ export const RootNode = memo(({ data, selected }: NodeProps<LineNodeData>) => (
   </div>
 ));
 
+const BET_SIZE_RE = /^\d+(\.\d+)?%$/;
+
+function isValidBetSize(val: string) {
+  return val === "" || BET_SIZE_RE.test(val);
+}
+
 export const ActionNode = memo(({ id, data, selected }: NodeProps<LineNodeData>) => {
   const { updateNodeData } = useReactFlow();
 
@@ -76,17 +82,33 @@ export const ActionNode = memo(({ id, data, selected }: NodeProps<LineNodeData>)
         <div className="flex items-center gap-1">
           <select
             value={data.actionType ?? "check"}
-            onChange={(e) => updateNodeData(id, { actionType: e.target.value as LineNodeData["actionType"] })}
+            onChange={(e) => {
+              const at = e.target.value as LineNodeData["actionType"];
+              const updates: Partial<LineNodeData> = { actionType: at };
+              if (at === "check" || at === "call" || at === "allin" || at === "fold") {
+                updates.betSize = "";
+              }
+              updateNodeData(id, updates);
+            }}
             onPointerDown={stopPropagation}
             className="flex-1 text-[11px] font-semibold rounded px-1.5 py-1 border bg-background text-foreground border-border focus:outline-none focus:ring-1 focus:ring-primary appearance-none cursor-pointer"
           >
-            {(["check", "bet", "raise", "call", "fold", "allin"] as const).map((at) => (
+            {(["check", "bet", "raise", "call", "fold", "allin"] as const)
+              .filter((at) => data.actor !== "villain" || at !== "check")
+              .map((at) => (
               <option key={at} value={at}>{ACTION_LABELS[at]}</option>
             ))}
           </select>
           <select
             value={data.actor}
-            onChange={(e) => updateNodeData(id, { actor: e.target.value as LineNodeData["actor"] })}
+            onChange={(e) => {
+              const newActor = e.target.value as LineNodeData["actor"];
+              const updates: Partial<LineNodeData> = { actor: newActor };
+              if (newActor === "villain" && data.actionType === "check") {
+                updates.actionType = "fold";
+              }
+              updateNodeData(id, updates);
+            }}
             onPointerDown={stopPropagation}
             className="text-[10px] rounded px-1.5 py-1 border bg-background text-muted-foreground border-border focus:outline-none focus:ring-1 focus:ring-primary appearance-none cursor-pointer uppercase"
           >
@@ -100,26 +122,34 @@ export const ActionNode = memo(({ id, data, selected }: NodeProps<LineNodeData>)
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1">
-          <span className="text-[10px] text-muted-foreground font-mono flex-shrink-0">Bet</span>
-          <input
-            type="text"
-            value={data.betSize ?? ""}
-            onChange={(e) => updateNodeData(id, { betSize: e.target.value })}
-            onPointerDown={stopPropagation}
-            placeholder="size"
-            className="flex-1 text-[10px] rounded px-1.5 py-1 border bg-background text-foreground border-border focus:outline-none focus:ring-1 focus:ring-primary font-mono"
-          />
-        </div>
-        <label className="flex items-center gap-1.5 cursor-pointer" onPointerDown={stopPropagation}>
-          <input
-            type="checkbox"
-            checked={data.correct ?? false}
-            onChange={(e) => updateNodeData(id, { correct: e.target.checked })}
-            className="accent-green-600 w-3 h-3"
-          />
-          <span className="text-[9px] text-muted-foreground">Correct</span>
-        </label>
+        {data.actionType && data.actionType !== "check" && data.actionType !== "call" && data.actionType !== "allin" && data.actionType !== "fold" && (
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-muted-foreground font-mono flex-shrink-0">{ACTION_LABELS[data.actionType]}</span>
+            <input
+              type="text"
+              value={data.betSize ?? ""}
+              onChange={(e) => updateNodeData(id, { betSize: e.target.value })}
+              onPointerDown={stopPropagation}
+              placeholder="e.g. 33%"
+              className={`flex-1 text-[10px] rounded px-1.5 py-1 border font-mono ${
+                data.betSize && !isValidBetSize(data.betSize)
+                  ? "border-red-500 bg-red-50 dark:bg-red-950/20 text-red-600"
+                  : "bg-background text-foreground border-border"
+              } focus:outline-none focus:ring-1 focus:ring-primary`}
+            />
+          </div>
+        )}
+        {data.actor !== "villain" && (
+          <label className="flex items-center gap-1.5 cursor-pointer" onPointerDown={stopPropagation}>
+            <input
+              type="checkbox"
+              checked={data.correct ?? false}
+              onChange={(e) => updateNodeData(id, { correct: e.target.checked })}
+              className="accent-green-600 w-3 h-3"
+            />
+            <span className="text-[9px] text-muted-foreground">Correct</span>
+          </label>
+        )}
       </div>
       <Handle type="source" position={Position.Bottom} className="!bg-border" />
     </div>

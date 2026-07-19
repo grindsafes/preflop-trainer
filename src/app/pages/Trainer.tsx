@@ -128,6 +128,22 @@ export default function Trainer() {
     return cards.length > 0 ? cards.join(",") : undefined;
   }, [currentPathIndex, currentStepIndex, paths, lineTreeNodes, currentFlopNodeId, flopNodeIds]);
 
+  const betSizes = useMemo(() => {
+    const path = paths[currentPathIndex];
+    if (!path) return undefined;
+    const drill = lineDrills.find((d) => d.id === selectedLineDrillId);
+    if (!drill) return undefined;
+    const opp = drill.heroPosition === "BU" ? "BB" : "BU";
+    for (let i = currentStepIndex; i >= 0; i--) {
+      const node = lineTreeNodes.find(n => n.id === path[i]);
+      if (node?.data.betSize && node.data.actionType !== "check" && node.data.actionType !== "call" && node.data.actionType !== "allin" && node.data.actionType !== "fold") {
+        const pos = node.data.actor === "hero" ? drill.heroPosition : opp;
+        return { [pos]: node.data.betSize };
+      }
+    }
+    return undefined;
+  }, [currentPathIndex, currentStepIndex, paths, lineTreeNodes, selectedLineDrillId, lineDrills]);
+
   useEffect(() => {
     if (!currentPathNodeId) {
       if (villainTimerRef.current) { clearTimeout(villainTimerRef.current); villainTimerRef.current = null; }
@@ -1322,6 +1338,7 @@ export default function Trainer() {
                       positions={["BU", "BB"]}
                       heroPosition={selectedLineDrill.heroPosition}
                       boardCards={boardCards}
+                      betSizes={betSizes}
                     />
                   </div>
 

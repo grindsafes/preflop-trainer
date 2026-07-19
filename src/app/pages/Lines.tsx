@@ -185,7 +185,7 @@ export default function Lines() {
       for (const childId of childMap.get(nodeId) ?? []) {
         const child = nodes.find((n) => n.id === childId);
         if (!child) continue;
-        if (child.data.nodeType === "action") {
+        if (child.data.nodeType === "action" && child.data.actor !== "villain") {
           result.push(childId);
         } else if (child.data.nodeType === "street" || child.data.nodeType === "street-group") {
           result.push(...findReachableActions(childId, visited));
@@ -195,6 +195,7 @@ export default function Lines() {
     }
     for (const node of nodes) {
       if (node.data.nodeType !== "root" && node.data.nodeType !== "action") continue;
+      if (node.data.actor === "villain") continue;
       const children = childMap.get(node.id);
       if (!children || children.length === 0) continue;
       const reachableActions = findReachableActions(node.id, new Set());
@@ -233,6 +234,33 @@ export default function Lines() {
         <div className="flex flex-col gap-1">
           <span className="font-semibold text-red-500">
             {violations.length === 1 ? "1 branch missing a correct action" : `${violations.length} branches missing a correct action`}
+          </span>
+          {details.map((d, i) => (
+            <span key={i} className="text-xs text-muted-foreground">• {d}</span>
+          ))}
+        </div>,
+        { icon: <X size={18} className="text-red-500" />, duration: 5000 }
+      );
+      return;
+    }
+
+    // Validate bet sizes — must be in % format
+    const badBetSizes = nodes.filter((n) => {
+      if (n.data.nodeType !== "action") return false;
+      if (!n.data.betSize) return false;
+      return !/^\d+(\.\d+)?%$/.test(n.data.betSize);
+    });
+    if (badBetSizes.length > 0) {
+      const details = badBetSizes.map((n) => {
+        const label = n.data.actionType
+          ? n.data.actionType.charAt(0).toUpperCase() + n.data.actionType.slice(1)
+          : "?";
+        return `"${label}" — "${n.data.betSize}" (must be like 33%)`;
+      });
+      toast(
+        <div className="flex flex-col gap-1">
+          <span className="font-semibold text-red-500">
+            {badBetSizes.length === 1 ? "1 invalid bet size" : `${badBetSizes.length} invalid bet sizes`}
           </span>
           {details.map((d, i) => (
             <span key={i} className="text-xs text-muted-foreground">• {d}</span>
