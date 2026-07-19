@@ -1,27 +1,34 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { Helmet } from "react-helmet-async";
-import { Check, X, Square, Plus, FolderPlus, FolderOpen } from "lucide-react";
+import { Check, X, Square, Plus, FolderPlus, FolderOpen, GitBranch, Layout, Pencil, Edit, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useTrainerContext } from "../TrainerContext";
-import { loadSessions, saveSessions, expandHand, parseCombo, getPositions, getActionStyle } from "../utils";
+import { loadSessions, saveSessions, loadLineSessions, saveLineSessions, expandHand, parseCombo, getPositions, getActionStyle, loadFromStorage } from "../utils";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { PokerTable } from "../components/PokerTable";
 import { RangeGrid } from "../components/RangeGrid";
 import { SessionGrid } from "../components/SessionGrid";
 import { FolderTree } from "../components/FolderTree";
 import { DrillEditor } from "../components/DrillEditor";
+import { LineDrillEditor } from "../components/LineDrillEditor";
 import { Drawer, DrawerTrigger, DrawerContent, DrawerHeader, DrawerTitle } from "../components/ui/drawer";
-import type { Drill, Range, SessionData } from "../types";
+import type { Node, Edge } from "@xyflow/react";
+import type { Drill, Range, SessionData, LineTree, LineNodeData, LineSessionData, LineDrill } from "../types";
 
 type TrainerPhase = "idle" | "question" | "result";
-type TrainerView = "drills" | "edit-drill" | "preview" | "training";
+type TrainerView = "drills" | "edit-drill" | "preview" | "training" | "edit-line-drill" | "line-drill-preview" | "line-drill-training";
+type TrainerMode = "range" | "line";
 
 export default function Trainer() {
-  const { ranges, drills, drillFolders, saveDrill: onSaveDrill, deleteDrill: onDeleteDrill, moveDrill: onMoveDrill, newDrillFolder, renameDrillFolder, deleteDrillFolder, moveDrillFolder } = useTrainerContext();
+  const { ranges, drills, drillFolders, lineTrees, lineFolders, lineDrills, lineDrillFolders, saveLineTree, renameLineTree, deleteLineTree, newLineFolder, saveDrill: onSaveDrill, deleteDrill: onDeleteDrill, moveDrill: onMoveDrill, newDrillFolder, renameDrillFolder, deleteDrillFolder, moveDrillFolder, saveLineDrill: onSaveLineDrill, deleteLineDrill: onDeleteLineDrill, moveLineDrill: onMoveLineDrill, newLineDrillFolder, renameLineDrillFolder, deleteLineDrillFolder, moveLineDrillFolder } = useTrainerContext();
 
   const [view, setView] = useState<TrainerView>("drills");
+  const [mode, setMode] = useState<TrainerMode>("range");
   const [selectedDrillId, setSelectedDrillId] = useState<string | null>(null);
+  const [selectedLineDrillId, setSelectedLineDrillId] = useState<string | null>(null);
+  const [lineHeroPosition, setLineHeroPosition] = useState<string>("BU");
   const [editingDrill, setEditingDrill] = useState<Drill | undefined>(undefined);
+  const [editingLineDrill, setEditingLineDrill] = useState<LineDrill | undefined>(undefined);
 
   const [phase, setPhase] = useState<TrainerPhase>("idle");
   const [currentHand, setCurrentHand] = useState<string | null>(null);
@@ -30,8 +37,24 @@ export default function Trainer() {
   const [revealGrid, setRevealGrid] = useState(false);
   const recentHandsRef = useRef<string[]>([]);
 
+  const [lineTreeNodes, setLineTreeNodes] = useState<Node<LineNodeData>[]>([]);
+  const [lineTreeEdges, setLineTreeEdges] = useState<Edge[]>([]);
+  const [lineAnswer, setLineAnswer] = useState<string | null>(null);
+  const [paths, setPaths] = useState<string[][]>([]);
+  const [currentPathIndex, setCurrentPathIndex] = useState(0);
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [villainAction, setVillainAction] = useState<{ label: string } | null>(null);
+  const villainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lineAnswerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [sessions, setSessions] = useState<SessionData[]>(() => loadSessions());
+  const [lineSessions, setLineSessions] = useState<LineSessionData[]>(() => loadLineSessions());
+  const lineSessionsRef = useRef(lineSessions);
+  lineSessionsRef.current = lineSessions;
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [currentLineSessionId, setCurrentLineSessionId] = useState<string | null>(null);
+  const currentLineSessionRef = useRef<LineSessionData | null>(null);
+  const [currentFlopNodeId, setCurrentFlopNodeId] = useState<string | null>(null);
   const [viewingSessionId, setViewingSessionId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [flippingOut, setFlippingOut] = useState(false);
@@ -48,6 +71,123 @@ export default function Trainer() {
   const accuracy = stats.total > 0 ? ((stats.correct / stats.total) * 100).toFixed(1) : null;
   const correctActionId = currentHand && selectedRange ? selectedRange.grid[currentHand] : null;
   const correctAction = correctActionId ? actionMap[correctActionId] : null;
+
+  const currentLineSession = useMemo(
+    () => lineSessions.find((s) => s.id === currentLineSessionId) ?? null,
+    [lineSessions, currentLineSessionId]
+  );
+  currentLineSessionRef.current = currentLineSession;
+  const lineStats = { correct: currentLineSession?.correct ?? 0, total: currentLineSession?.total ?? 0 };
+  const lineAccuracy = lineStats.total > 0 ? ((lineStats.correct / lineStats.total) * 100).toFixed(1) : null;
+
+  const currentPathNodeId = paths[currentPathIndex]?.[currentStepIndex] ?? null;
+  const currentNode = lineTreeNodes.find((n) => n.id === currentPathNodeId) ?? null;
+  const currentCorrectChild = currentNode ? findCorrectChild(currentNode.id) : null;
+  const childrenOfCurrent = useMemo(() =>
+    currentPathNodeId ? getOrderedChildren(currentPathNodeId) : [],
+    [currentPathNodeId, lineTreeNodes, lineTreeEdges]
+  );
+  const heroActions = useMemo(() =>
+    childrenOfCurrent.filter(c => c.data.nodeType !== "street" && c.data.nodeType !== "street-group"),
+    [childrenOfCurrent]
+  );
+  const isVillainTurn = heroActions.length > 0 && heroActions.every(c => c.data.actor === 'villain');
+
+  const flopNodeIds = useMemo(() =>
+    lineTreeNodes.filter(n => n.data.street === "flop" && n.data.boardCards).map(n => n.id),
+    [lineTreeNodes]
+  );
+
+  function shouldSkipPath(path: string[], flopId: string | null): boolean {
+    if (!flopId) return false;
+    const pathFlopId = path.find(id => flopNodeIds.includes(id));
+    return pathFlopId !== undefined && pathFlopId !== flopId;
+  }
+
+  const boardCards = useMemo(() => {
+    const cards: string[] = [];
+    if (currentFlopNodeId) {
+      const flopNode = lineTreeNodes.find(n => n.id === currentFlopNodeId);
+      if (flopNode?.data.boardCards) {
+        for (const c of flopNode.data.boardCards.split(",").map(s => s.trim()).filter(Boolean)) {
+          if (!cards.includes(c)) cards.push(c);
+        }
+      }
+    }
+    const path = paths[currentPathIndex];
+    if (path) {
+      for (let i = 0; i <= currentStepIndex && i < path.length; i++) {
+        const node = lineTreeNodes.find(n => n.id === path[i]);
+        if (node?.data.boardCards && !flopNodeIds.includes(node.id)) {
+          for (const c of node.data.boardCards.split(",").map(s => s.trim()).filter(Boolean)) {
+            if (!cards.includes(c)) cards.push(c);
+          }
+        }
+      }
+    }
+    return cards.length > 0 ? cards.join(",") : undefined;
+  }, [currentPathIndex, currentStepIndex, paths, lineTreeNodes, currentFlopNodeId, flopNodeIds]);
+
+  useEffect(() => {
+    if (!currentPathNodeId) {
+      if (villainTimerRef.current) { clearTimeout(villainTimerRef.current); villainTimerRef.current = null; }
+      setVillainAction(null);
+      return;
+    }
+
+    const children = getOrderedChildren(currentPathNodeId);
+
+    if (children.length === 0) {
+      advanceLinePath();
+      return;
+    }
+
+    const nonStreetChildren = children.filter(c => c.data.nodeType !== "street" && c.data.nodeType !== "street-group");
+
+    // Auto-skip street nodes: they carry boardCards but aren't decision points
+    if (children.length > 0 && nonStreetChildren.length === 0) {
+      const nextStep = currentStepIndex + 1;
+      const isLastStep = nextStep >= (paths[currentPathIndex]?.length ?? 0);
+      if (isLastStep) {
+        advanceLinePath();
+      } else {
+        setCurrentStepIndex(nextStep);
+      }
+      return;
+    }
+
+    const isVillain = nonStreetChildren.length > 0 && nonStreetChildren.every(c => c.data.actor === 'villain');
+
+    if (isVillain) {
+      const correctChild = nonStreetChildren.find(n => n.data.correct) ?? nonStreetChildren[0];
+      if (!correctChild) return;
+
+      const label = correctChild.data.actionType
+        ? correctChild.data.actionType.charAt(0).toUpperCase() + correctChild.data.actionType.slice(1)
+        : correctChild.data.label;
+      setVillainAction({ label });
+
+      const nextStep = currentStepIndex + 1;
+      const isLastStep = nextStep >= (paths[currentPathIndex]?.length ?? 0);
+
+      villainTimerRef.current = setTimeout(() => {
+        setVillainAction(null);
+        villainTimerRef.current = null;
+        if (isLastStep) {
+          advanceLinePath();
+        } else {
+          setCurrentStepIndex(nextStep);
+        }
+      }, 800);
+
+      return () => {
+        if (villainTimerRef.current) { clearTimeout(villainTimerRef.current); villainTimerRef.current = null; }
+      };
+    } else {
+      if (villainTimerRef.current) { clearTimeout(villainTimerRef.current); villainTimerRef.current = null; }
+      setVillainAction(null);
+    }
+  }, [currentPathNodeId]);
 
   function selectDrill(drill: Drill) {
     setSelectedDrillId(drill.id);
@@ -213,6 +353,366 @@ export default function Trainer() {
     setViewingSessionId(null);
   }
 
+  // ─── Line Tree Helpers ─────────────────────────────────────────────────────
+
+  const selectedLineDrill = useMemo(() => lineDrills.find((d) => d.id === selectedLineDrillId) ?? null, [lineDrills, selectedLineDrillId]);
+  const selectedLineDrillTree = useMemo(() => {
+    if (!selectedLineDrill) return null;
+    return lineTrees.find((t) => t.id === selectedLineDrill.lineTreeId) ?? null;
+  }, [selectedLineDrill, lineTrees]);
+
+  const lineRootNode = useMemo(() => lineTreeNodes.find((n) => n.type === "root") ?? null, [lineTreeNodes]);
+
+  function parseLineTree(tree: LineTree) {
+    try {
+      const nodes = JSON.parse(tree.nodes || "[]") as Node<LineNodeData>[];
+      const edges = JSON.parse(tree.edges || "[]") as Edge[];
+      setLineTreeNodes(nodes);
+      setLineTreeEdges(edges);
+      return { nodes, edges };
+    } catch {
+      setLineTreeNodes([]);
+      setLineTreeEdges([]);
+      return { nodes: [], edges: [] };
+    }
+  }
+
+  function getOrderedChildren(parentId: string): Node<LineNodeData>[] {
+    return lineTreeEdges
+      .filter((e) => e.source === parentId)
+      .map((e) => lineTreeNodes.find((n) => n.id === e.target))
+      .filter((n): n is Node<LineNodeData> => n !== undefined)
+      .sort((a, b) => a.position.x - b.position.x);
+  }
+
+  function findCorrectChild(parentId: string): Node<LineNodeData> | null {
+    return getOrderedChildren(parentId).find((n) => n.data.correct) ?? null;
+  }
+
+  function generatePaths(nodes: Node<LineNodeData>[], edges: Edge[]): string[][] {
+    const root = nodes.find((n) => n.type === "root");
+    if (!root) return [];
+    const result: string[][] = [];
+
+    function dfs(nodeId: string, currentPath: string[]) {
+      const children = edges
+        .filter((e) => e.source === nodeId)
+        .map((e) => nodes.find((n) => n.id === e.target))
+        .filter((n): n is Node<LineNodeData> => n !== undefined)
+        .sort((a, b) => a.position.x - b.position.x);
+
+      if (children.length === 0) {
+        if (currentPath.length > 1) result.push([...currentPath]);
+        return;
+      }
+
+      for (const child of children) {
+        currentPath.push(child.id);
+        dfs(child.id, currentPath);
+        currentPath.pop();
+      }
+    }
+
+    const rootChildren = edges
+      .filter((e) => e.source === root.id)
+      .map((e) => nodes.find((n) => n.id === e.target))
+      .filter((n): n is Node<LineNodeData> => n !== undefined)
+      .sort((a, b) => a.position.x - b.position.x);
+
+    for (const child of rootChildren) {
+      dfs(child.id, [root.id, child.id]);
+    }
+
+    return result;
+  }
+
+  // ─── Line Drill Lifecycle ─────────────────────────────────────────────────
+
+  function startNewLineDrill() {
+    setEditingLineDrill(undefined);
+    setView("edit-line-drill");
+  }
+
+  function editLineDrill(drill: LineDrill) {
+    setEditingLineDrill(drill);
+    setView("edit-line-drill");
+  }
+
+  function saveLineDrill(drill: LineDrill) {
+    onSaveLineDrill(drill);
+    setSelectedLineDrillId(drill.id);
+    setView("line-drill-training");
+  }
+
+  function selectLineDrill(drill: LineDrill) {
+    setSelectedLineDrillId(drill.id);
+    const loaded = loadLineSessions();
+    setLineSessions(loaded);
+    const active = loaded.find((s) => s.lineDrillId === drill.id && s.endedAt === null);
+    setCurrentLineSessionId(active?.id ?? null);
+    setLineAnswer(null);
+    setCurrentPathIndex(0);
+    setCurrentStepIndex(0);
+    setCurrentFlopNodeId(null);
+
+    const raw = loadFromStorage();
+    const storedTree = raw.lineTrees?.find(t => t.id === drill.lineTreeId);
+    if (!storedTree) { setView("line-drill-preview"); return; }
+    const parsed = parseLineTree(storedTree);
+    if (parsed.nodes.length > 0) {
+      const generated = generatePaths(parsed.nodes, parsed.edges);
+      setPaths(generated);
+    }
+
+    if (active) {
+      setView("line-drill-training");
+      setPhase("question");
+    } else {
+      setView("line-drill-preview");
+      setPhase("idle");
+    }
+  }
+
+  function startLineDrillTraining() {
+    if (!selectedLineDrill || !selectedLineDrillTree) {
+      toast("No line tree linked to this drill.", { icon: <X size={18} className="text-red-500" /> });
+      return;
+    }
+
+    if (lineAnswerTimerRef.current) { clearTimeout(lineAnswerTimerRef.current); lineAnswerTimerRef.current = null; }
+    if (villainTimerRef.current) { clearTimeout(villainTimerRef.current); villainTimerRef.current = null; }
+
+    let freshNodes: Node<LineNodeData>[], freshEdges: Edge[];
+    try {
+      const raw = loadFromStorage();
+      const storedTree = raw.lineTrees?.find(t => t.id === selectedLineDrill.lineTreeId);
+      if (!storedTree) {
+        toast("Line tree data not found.", { icon: <X size={18} className="text-red-500" /> });
+        return;
+      }
+      freshNodes = JSON.parse(storedTree.nodes || "[]");
+      freshEdges = JSON.parse(storedTree.edges || "[]");
+    } catch {
+      toast("Failed to parse line tree data.", { icon: <X size={18} className="text-red-500" /> });
+      return;
+    }
+    if (freshNodes.length === 0) {
+      toast("The selected tree has no scenarios available for testing.", { icon: <X size={18} className="text-red-500" /> });
+      return;
+    }
+
+    setLineTreeNodes(freshNodes);
+    setLineTreeEdges(freshEdges);
+
+    const freshFlopIds = freshNodes
+      .filter(n => n.data.street === "flop" && n.data.boardCards)
+      .map(n => n.id);
+    const initialFlopId = freshFlopIds.length > 0
+      ? freshFlopIds[Math.floor(Math.random() * freshFlopIds.length)]
+      : null;
+
+    const generated = generatePaths(freshNodes, freshEdges);
+    setPaths(generated);
+
+    const updated = lineSessions.map((s) =>
+      s.lineDrillId === selectedLineDrill.id && s.endedAt === null
+        ? { ...s, endedAt: Date.now() }
+        : s
+    );
+    const newSession: LineSessionData = {
+      id: `line-session-${Date.now()}`,
+      lineTreeId: selectedLineDrill.lineTreeId,
+      lineDrillId: selectedLineDrill.id,
+      heroPosition: selectedLineDrill.heroPosition,
+      startedAt: Date.now(),
+      endedAt: null,
+      total: 0,
+      correct: 0,
+      history: [],
+      usedFlopNodeIds: initialFlopId ? [initialFlopId] : [],
+    };
+    const all = [...updated, newSession];
+    setLineSessions(all);
+    saveLineSessions(all);
+    setCurrentLineSessionId(newSession.id);
+    setCurrentFlopNodeId(initialFlopId);
+    setView("line-drill-training");
+    const initialPathIdx = initialFlopId
+      ? generated.findIndex(p => !shouldSkipPath(p, initialFlopId))
+      : 0;
+    setCurrentPathIndex(initialPathIdx >= 0 ? initialPathIdx : 0);
+    setCurrentStepIndex(0);
+  }
+
+  function stopLineDrillTraining() {
+    if (lineAnswerTimerRef.current) { clearTimeout(lineAnswerTimerRef.current); lineAnswerTimerRef.current = null; }
+    if (villainTimerRef.current) { clearTimeout(villainTimerRef.current); villainTimerRef.current = null; }
+    if (!currentLineSession) return;
+    const updated = lineSessions.map((s) =>
+      s.id === currentLineSession.id ? { ...s, endedAt: Date.now() } : s
+    );
+    setLineSessions(updated);
+    saveLineSessions(updated);
+    setView("line-drill-preview");
+    setCurrentLineSessionId(null);
+    setLineAnswer(null);
+    setCurrentPathIndex(0);
+    setCurrentStepIndex(0);
+    setCurrentFlopNodeId(null);
+  }
+
+  function advanceLinePath() {
+    if (paths.length === 0) return;
+    if (currentPathIndex < 0) return;
+
+    const latestSession = currentLineSessionRef.current;
+    const latestSessions = lineSessionsRef.current;
+
+    if (flopNodeIds.length === 0) {
+      const next = currentPathIndex + 1;
+      if (next < paths.length) {
+        setCurrentPathIndex(next);
+        setCurrentStepIndex(0);
+        setLineAnswer(null);
+      } else {
+        setCurrentPathIndex(-1);
+        setCurrentStepIndex(0);
+        setLineAnswer(null);
+      }
+      return;
+    }
+
+    const usedIds = latestSession?.usedFlopNodeIds ?? [];
+    const unusedIds = flopNodeIds.filter(id => !usedIds.includes(id));
+
+    if (unusedIds.length > 0) {
+      for (const candidate of unusedIds) {
+        const candidatePathIdx = paths.findIndex(p => !shouldSkipPath(p, candidate));
+        if (candidatePathIdx < 0) continue;
+
+        const updatedUsedIds = currentFlopNodeId
+          ? [...new Set([...usedIds, currentFlopNodeId, candidate])]
+          : [...usedIds, candidate];
+        setCurrentFlopNodeId(candidate);
+        if (latestSession) {
+          const updated = latestSessions.map(s =>
+            s.id === latestSession.id
+              ? { ...s, usedFlopNodeIds: updatedUsedIds }
+              : s
+          );
+          setLineSessions(updated);
+          saveLineSessions(updated);
+        }
+        setCurrentPathIndex(candidatePathIdx);
+        setCurrentStepIndex(0);
+        setLineAnswer(null);
+        return;
+      }
+    }
+
+    setCurrentPathIndex(-1);
+    setCurrentStepIndex(0);
+    setLineAnswer(null);
+  }
+
+  function lineAnswerAction(nodeId: string) {
+    if (!currentLineSession || !currentPathNodeId) return;
+    const clicked = lineTreeNodes.find((n) => n.id === nodeId);
+    if (!clicked) return;
+    const correctNode = findCorrectChild(currentPathNodeId);
+    const isCorrect = correctNode?.id === nodeId;
+
+    if (isCorrect) {
+      toast("Correct", { icon: <Check size={18} className="text-green-500" /> });
+    } else {
+      toast(`Incorrect — expected "${correctNode?.data.actionType ?? "?"}"`, { icon: <X size={18} className="text-red-500" /> });
+    }
+
+    const updatedNodes = lineTreeNodes.map((n) => {
+      if (n.id === nodeId) {
+        const prev = n.data.stats ?? { total: 0, correct: 0 };
+        return { ...n, data: { ...n.data, stats: { total: prev.total + 1, correct: prev.correct + (isCorrect ? 1 : 0) } } };
+      }
+      if (correctNode && n.id === correctNode.id && nodeId !== correctNode.id) {
+        const prev = n.data.stats ?? { total: 0, correct: 0 };
+        return { ...n, data: { ...n.data, stats: { total: prev.total + 1, correct: prev.correct } } };
+      }
+      return n;
+    });
+    setLineTreeNodes(updatedNodes);
+
+    const updatedSessions = lineSessions.map((s) => {
+      if (s.id !== currentLineSession.id) return s;
+      return {
+        ...s,
+        total: s.total + 1,
+        correct: s.correct + (isCorrect ? 1 : 0),
+        history: [{ nodeId, nodeLabel: clicked.data.actionType ?? "", correct: isCorrect, boardCards: boardCards }, ...s.history],
+      };
+    });
+    setLineSessions(updatedSessions);
+    saveLineSessions(updatedSessions);
+
+    if (isCorrect) {
+      if (lineAnswerTimerRef.current) clearTimeout(lineAnswerTimerRef.current);
+      setLineAnswer(nodeId);
+      lineAnswerTimerRef.current = setTimeout(() => {
+        lineAnswerTimerRef.current = null;
+        const nextStep = currentStepIndex + 1;
+        if (nextStep < paths[currentPathIndex].length) {
+          setCurrentStepIndex(nextStep);
+        } else {
+          toast("Path complete!");
+          advanceLinePath();
+        }
+        setLineAnswer(null);
+      }, 1000);
+    } else {
+      if (lineAnswerTimerRef.current) clearTimeout(lineAnswerTimerRef.current);
+      setLineAnswer(nodeId);
+      lineAnswerTimerRef.current = setTimeout(() => {
+        lineAnswerTimerRef.current = null;
+        const latestSession = currentLineSessionRef.current;
+        const latestSessions = lineSessionsRef.current;
+        const usedIds = latestSession?.usedFlopNodeIds ?? [];
+        const unusedIds = flopNodeIds.filter(id => !usedIds.includes(id));
+        if (unusedIds.length > 0) {
+          let matched = false;
+          for (const candidate of unusedIds) {
+            const candidatePathIdx = paths.findIndex(p => !shouldSkipPath(p, candidate));
+            if (candidatePathIdx < 0) continue;
+            setCurrentFlopNodeId(candidate);
+            if (latestSession) {
+              const updated = latestSessions.map(s =>
+                s.id === latestSession.id
+                  ? { ...s, usedFlopNodeIds: [...usedIds, candidate] }
+                  : s
+              );
+              setLineSessions(updated);
+              saveLineSessions(updated);
+            }
+            setCurrentPathIndex(candidatePathIdx);
+            setCurrentStepIndex(0);
+            matched = true;
+            break;
+          }
+          if (!matched) toast("No more scenarios available.");
+        } else {
+          toast("No more scenarios available.");
+        }
+        setLineAnswer(null);
+      }, 1500);
+    }
+
+    if (selectedLineDrillTree) {
+      saveLineTree({
+        ...selectedLineDrillTree,
+        nodes: JSON.stringify(updatedNodes),
+        edges: JSON.stringify(lineTreeEdges),
+      });
+    }
+  }
+
   function formatDate(ts: number) {
     return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   }
@@ -245,6 +745,28 @@ export default function Trainer() {
     );
   }
 
+  const SUIT_SYMBOLS: Record<string, string> = { s: "♠", h: "♥", d: "♦", c: "♣" };
+  const SUIT_COLORS: Record<string, string> = { s: "#000", h: "#ef4444", d: "#3b82f6", c: "#22c55e" };
+
+  function renderMiniBoardCards(cards: string) {
+    const list = cards.split(",").map(c => c.trim()).filter(Boolean);
+    return (
+      <div className="flex gap-0.5">
+        {list.map((card, i) => {
+          const rank = card[0].toUpperCase();
+          const suit = card[1]?.toLowerCase();
+          const color = SUIT_COLORS[suit] ?? "var(--card-foreground)";
+          return (
+            <div key={i} className="rounded border border-border flex flex-col items-center justify-center" style={{ width: 22, height: 30, backgroundColor: "var(--card)" }}>
+              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 700, color, lineHeight: 1 }}>{rank}</span>
+              <span style={{ fontSize: 7, color, lineHeight: 1 }}>{SUIT_SYMBOLS[suit] ?? "?"}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   return (
     <>
     <Helmet>
@@ -256,116 +778,48 @@ export default function Trainer() {
     </Helmet>
     <div className="flex flex-col lg:flex-row gap-3 lg:gap-5 h-full px-3 md:px-6 py-3 md:py-5">
       <aside className="hidden lg:flex w-80 flex-shrink-0 flex-col gap-4 overflow-y-auto border-r border-border pr-4">
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Drills</span>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => newDrillFolder(null)}
-                className="text-muted-foreground hover:text-primary transition-colors"
-                title="New folder"
-              >
-                <FolderPlus size={12} />
-              </button>
-              <button
-                onClick={startNewDrill}
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"
-              >
-                <Plus size={11} /> New
-              </button>
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <FolderTree
-              items={drills}
-              folders={drillFolders}
-              onMoveItem={onMoveDrill}
-              onMoveFolder={moveDrillFolder}
-              allFolders={drillFolders}
-              onDeleteFolder={deleteDrillFolder}
-              onRenameFolder={renameDrillFolder}
-              selectedItemId={selectedDrillId}
-              onSelectItem={(item) => { const d = drills.find((x) => x.id === item.id); if (d) { selectDrill(d); setSidebarOpen(false); } }}
-              onEditItem={(id) => { const d = drills.find((x) => x.id === id); if (d) editDrill(d); setSidebarOpen(false); }}
-              onDeleteItem={(id) => { onDeleteDrill(id); if (selectedDrillId === id) { setSelectedDrillId(null); setView("drills"); } }}
-              renderItem={(item) => {
-                const d = drills.find((x) => x.id === item.id);
-                const active = item.id === selectedDrillId;
-                const drillSessions = sessions.filter((s) => s.drillId === item.id && s.endedAt !== null);
-                const totalCorrect = drillSessions.reduce((sum, s) => sum + s.correct, 0);
-                const totalHands = drillSessions.reduce((sum, s) => sum + s.total, 0);
-                const avg = totalHands > 0 ? ((totalCorrect / totalHands) * 100).toFixed(1) : null;
-                return (
-                  <div className="flex items-center justify-between">
-                    <div className="flex flex-col min-w-0">
-                      <span className={`text-xs font-medium truncate ${active ? "text-foreground" : "text-muted-foreground group-hover:text-foreground"}`}>{item.name}</span>
-                      {d && (
-                        <span className="text-[9px] text-muted-foreground" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-                          {d.numPlayers}p · {d.heroPosition}
-                        </span>
-                      )}
-                      {avg && (
-                        <span className="text-[9px]" style={{
-                          fontFamily: "'JetBrains Mono', monospace",
-                          color: parseFloat(avg) >= 80 ? "#22c55e" : parseFloat(avg) >= 60 ? "#fbbf24" : "#ef4444",
-                        }}>
-                          Avg. {avg}%
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              }}
-              emptyMessage="No drills yet — create one to get started."
-            />
-          </div>
+        {/* Mode toggle */}
+        <div className="flex items-center gap-1 bg-secondary rounded-full p-0.5">
+          <button
+            onClick={() => setMode("range")}
+            className={`flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-full transition-colors ${
+              mode === "range" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Layout size={12} /> Ranges
+          </button>
+          <button
+            onClick={() => setMode("line")}
+            className={`flex-1 flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-full transition-colors ${
+              mode === "line" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <GitBranch size={12} /> Lines
+          </button>
         </div>
 
-        {selectedDrill && (view === "preview" || view === "training") && (
-          <>
-            {activeSession && phase === "idle" && (
-              <div className="bg-card rounded-md border border-border p-3">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Active Session</p>
-                <p className="text-2xl font-bold text-center" style={{
-                  fontFamily: "'JetBrains Mono', monospace",
-                  color: parseFloat(accuracy!) >= 80 ? "#22c55e" : parseFloat(accuracy!) >= 60 ? "#fbbf24" : "#ef4444",
-                }}>
-                  {accuracy}%
-                </p>
-                <p className="text-xs text-muted-foreground text-center">{stats.correct}/{stats.total} correct</p>
-                <div className="flex gap-2 mt-2">
-                  <button onClick={resumeTraining} className="flex-1 py-1.5 rounded-full bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors">
-                    Resume
-                  </button>
-                  <button onClick={stopTraining} className="flex-1 py-1.5 rounded-full bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors">
-                    End
-                  </button>
-                </div>
+        {mode === "range" && (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Drills</span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => newDrillFolder(null)}
+                  className="text-muted-foreground hover:text-primary transition-colors"
+                  title="New folder"
+                >
+                  <FolderPlus size={12} />
+                </button>
+                <button
+                  onClick={startNewDrill}
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"
+                >
+                  <Plus size={11} /> New
+                </button>
               </div>
-            )}
+            </div>
 
-          </>
-        )}
-      </aside>
-
-      {/* Mobile drills toggle */}
-      <div className="flex lg:hidden items-center gap-2">
-        <Drawer open={sidebarOpen} onOpenChange={setSidebarOpen}>
-          <DrawerTrigger asChild>
-            <button className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-full border border-border text-muted-foreground hover:text-foreground hover:border-muted-foreground transition-colors">
-              <FolderOpen size={14} /> Drills
-            </button>
-          </DrawerTrigger>
-          <DrawerContent>
-            <DrawerHeader>
-              <DrawerTitle>Drills</DrawerTitle>
-            </DrawerHeader>
-            <div className="px-4 pb-6 flex flex-col gap-3">
-              <div className="flex items-center gap-2">
-                <button onClick={() => newDrillFolder(null)} className="text-muted-foreground hover:text-primary transition-colors" title="New folder"><FolderPlus size={14} /></button>
-                <button onClick={() => { startNewDrill(); setSidebarOpen(false); }} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"><Plus size={11} /> New</button>
-              </div>
+            <div className="flex flex-col gap-1">
               <FolderTree
                 items={drills}
                 folders={drillFolders}
@@ -409,6 +863,257 @@ export default function Trainer() {
                 emptyMessage="No drills yet — create one to get started."
               />
             </div>
+          </div>
+        )}
+
+        {mode === "line" && (
+          <div className="flex flex-col gap-4">
+            {/* Line Drills section */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Line Drills</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => newLineDrillFolder(null)}
+                    className="text-muted-foreground hover:text-primary transition-colors"
+                    title="New folder"
+                  >
+                    <FolderPlus size={12} />
+                  </button>
+                  <button
+                    onClick={startNewLineDrill}
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"
+                  >
+                    <Plus size={11} /> New
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-col gap-1">
+                <FolderTree
+                  items={lineDrills}
+                  folders={lineDrillFolders}
+                  onMoveItem={onMoveLineDrill}
+                  onMoveFolder={moveLineDrillFolder}
+                  allFolders={lineDrillFolders}
+                  onDeleteFolder={deleteLineDrillFolder}
+                  onRenameFolder={renameLineDrillFolder}
+                  selectedItemId={selectedLineDrillId}
+                  onSelectItem={(item) => { const d = lineDrills.find((x) => x.id === item.id); if (d) { selectLineDrill(d); setSidebarOpen(false); } }}
+                  onEditItem={(id) => { const d = lineDrills.find((x) => x.id === id); if (d) editLineDrill(d); setSidebarOpen(false); }}
+                  onDeleteItem={(id) => { onDeleteLineDrill(id); if (selectedLineDrillId === id) { setSelectedLineDrillId(null); setView("drills"); } }}
+                  renderItem={(item) => {
+                    const d = lineDrills.find((x) => x.id === item.id);
+                    const active = item.id === selectedLineDrillId;
+                    const drillSessions = lineSessions.filter((s) => s.lineDrillId === item.id && s.endedAt !== null);
+                    const totalCorrect = drillSessions.reduce((sum, s) => sum + s.correct, 0);
+                    const totalHands = drillSessions.reduce((sum, s) => sum + s.total, 0);
+                    const avg = totalHands > 0 ? ((totalCorrect / totalHands) * 100).toFixed(1) : null;
+                    const treeName = d ? lineTrees.find(t => t.id === d.lineTreeId)?.name ?? "?" : "";
+                    return (
+                      <div className="flex items-center justify-between">
+                        <div className="flex flex-col min-w-0">
+                          <span className={`text-xs font-medium truncate ${active ? "text-foreground" : "text-muted-foreground group-hover:text-foreground"}`}>{item.name}</span>
+                          {d && (
+                            <span className="text-[9px] text-muted-foreground" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+                              {treeName} · {d.heroPosition}
+                            </span>
+                          )}
+                          {avg && (
+                            <span className="text-[9px]" style={{
+                              fontFamily: "'JetBrains Mono', monospace",
+                              color: parseFloat(avg) >= 80 ? "#22c55e" : parseFloat(avg) >= 60 ? "#fbbf24" : "#ef4444",
+                            }}>
+                              Avg. {avg}%
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }}
+                  emptyMessage="No line drills yet — create one to get started."
+                />
+              </div>
+            </div>
+
+          </div>
+        )}
+
+        {mode === "range" && selectedDrill && (view === "preview" || view === "training") && (
+          <>
+            {activeSession && phase === "idle" && (
+              <div className="bg-card rounded-md border border-border p-3">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Active Session</p>
+                <p className="text-2xl font-bold text-center" style={{
+                  fontFamily: "'JetBrains Mono', monospace",
+                  color: parseFloat(accuracy!) >= 80 ? "#22c55e" : parseFloat(accuracy!) >= 60 ? "#fbbf24" : "#ef4444",
+                }}>
+                  {accuracy}%
+                </p>
+                <p className="text-xs text-muted-foreground text-center">{stats.correct}/{stats.total} correct</p>
+                <div className="flex gap-2 mt-2">
+                  <button onClick={resumeTraining} className="flex-1 py-1.5 rounded-full bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors">
+                    Resume
+                  </button>
+                  <button onClick={stopTraining} className="flex-1 py-1.5 rounded-full bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors">
+                    End
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {mode === "line" && selectedLineDrill && view && (
+          <>
+            {currentLineSession && (phase === "idle" || view === "line-drill-training") && (
+              <div className="bg-card rounded-md border border-border p-3">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Active Session</p>
+                <p className="text-2xl font-bold text-center" style={{
+                  fontFamily: "'JetBrains Mono', monospace",
+                  color: lineAccuracy && parseFloat(lineAccuracy) >= 80 ? "#22c55e" : lineAccuracy && parseFloat(lineAccuracy) >= 60 ? "#fbbf24" : "#ef4444",
+                }}>
+                  {lineAccuracy ?? "0.0"}%
+                </p>
+                <p className="text-xs text-muted-foreground text-center">{lineStats.correct}/{lineStats.total} correct</p>
+              </div>
+            )}
+          </>
+        )}
+      </aside>
+
+      {/* Mobile mode toggle & drawer */}
+      <div className="flex lg:hidden items-center gap-2">
+        <div className="flex items-center gap-1 bg-secondary rounded-full p-0.5">
+          <button
+            onClick={() => setMode("range")}
+            className={`flex items-center gap-1 text-[10px] py-1 px-2.5 rounded-full transition-colors ${
+              mode === "range" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
+            }`}
+          >
+            <Layout size={11} /> Ranges
+          </button>
+          <button
+            onClick={() => setMode("line")}
+            className={`flex items-center gap-1 text-[10px] py-1 px-2.5 rounded-full transition-colors ${
+              mode === "line" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
+            }`}
+          >
+            <GitBranch size={11} /> Lines
+          </button>
+        </div>
+        <Drawer open={sidebarOpen} onOpenChange={setSidebarOpen}>
+          <DrawerTrigger asChild>
+            <button className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-full border border-border text-muted-foreground hover:text-foreground hover:border-muted-foreground transition-colors">
+              <FolderOpen size={14} /> {mode === "range" ? "Drills" : "Lines"}
+            </button>
+          </DrawerTrigger>
+          <DrawerContent>
+            <DrawerHeader>
+              <DrawerTitle>{mode === "range" ? "Drills" : "Line Drills"}</DrawerTitle>
+            </DrawerHeader>
+            <div className="px-4 pb-6 flex flex-col gap-3">
+              {mode === "range" && (
+                <>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => newDrillFolder(null)} className="text-muted-foreground hover:text-primary transition-colors" title="New folder"><FolderPlus size={14} /></button>
+                    <button onClick={() => { startNewDrill(); setSidebarOpen(false); }} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"><Plus size={11} /> New</button>
+                  </div>
+                  <FolderTree
+                    items={drills}
+                    folders={drillFolders}
+                    onMoveItem={onMoveDrill}
+                    onMoveFolder={moveDrillFolder}
+                    allFolders={drillFolders}
+                    onDeleteFolder={deleteDrillFolder}
+                    onRenameFolder={renameDrillFolder}
+                    selectedItemId={selectedDrillId}
+                    onSelectItem={(item) => { const d = drills.find((x) => x.id === item.id); if (d) { selectDrill(d); setSidebarOpen(false); } }}
+                    onEditItem={(id) => { const d = drills.find((x) => x.id === id); if (d) editDrill(d); setSidebarOpen(false); }}
+                    onDeleteItem={(id) => { onDeleteDrill(id); if (selectedDrillId === id) { setSelectedDrillId(null); setView("drills"); } }}
+                    renderItem={(item) => {
+                      const d = drills.find((x) => x.id === item.id);
+                      const active = item.id === selectedDrillId;
+                      const drillSessions = sessions.filter((s) => s.drillId === item.id && s.endedAt !== null);
+                      const totalCorrect = drillSessions.reduce((sum, s) => sum + s.correct, 0);
+                      const totalHands = drillSessions.reduce((sum, s) => sum + s.total, 0);
+                      const avg = totalHands > 0 ? ((totalCorrect / totalHands) * 100).toFixed(1) : null;
+                      return (
+                        <div className="flex items-center justify-between">
+                          <div className="flex flex-col min-w-0">
+                            <span className={`text-xs font-medium truncate ${active ? "text-foreground" : "text-muted-foreground group-hover:text-foreground"}`}>{item.name}</span>
+                            {d && (
+                              <span className="text-[9px] text-muted-foreground" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+                                {d.numPlayers}p · {d.heroPosition}
+                              </span>
+                            )}
+                            {avg && (
+                              <span className="text-[9px]" style={{
+                                fontFamily: "'JetBrains Mono', monospace",
+                                color: parseFloat(avg) >= 80 ? "#22c55e" : parseFloat(avg) >= 60 ? "#fbbf24" : "#ef4444",
+                              }}>
+                                Avg. {avg}%
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }}
+                    emptyMessage="No drills yet — create one to get started."
+                  />
+                </>
+              )}
+              {mode === "line" && (
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => newLineDrillFolder(null)} className="text-muted-foreground hover:text-primary transition-colors" title="New folder"><FolderPlus size={14} /></button>
+                    <button onClick={() => { startNewLineDrill(); setSidebarOpen(false); }} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"><Plus size={11} /> New Line Drill</button>
+                  </div>
+                  <FolderTree
+                    items={lineDrills}
+                    folders={lineDrillFolders}
+                    onMoveItem={onMoveLineDrill}
+                    onMoveFolder={moveLineDrillFolder}
+                    allFolders={lineDrillFolders}
+                    onDeleteFolder={deleteLineDrillFolder}
+                    onRenameFolder={renameLineDrillFolder}
+                    selectedItemId={selectedLineDrillId}
+                    onSelectItem={(item) => { const d = lineDrills.find((x) => x.id === item.id); if (d) { selectLineDrill(d); setSidebarOpen(false); } }}
+                    onEditItem={(id) => { const d = lineDrills.find((x) => x.id === id); if (d) editLineDrill(d); setSidebarOpen(false); }}
+                    onDeleteItem={(id) => { onDeleteLineDrill(id); if (selectedLineDrillId === id) { setSelectedLineDrillId(null); setView("drills"); } }}
+                    renderItem={(item) => {
+                      const d = lineDrills.find((x) => x.id === item.id);
+                      const active = item.id === selectedLineDrillId;
+                      const drillSessions = lineSessions.filter((s) => s.lineDrillId === item.id && s.endedAt !== null);
+                      const totalCorrect = drillSessions.reduce((sum, s) => sum + s.correct, 0);
+                      const totalHands = drillSessions.reduce((sum, s) => sum + s.total, 0);
+                      const avg = totalHands > 0 ? ((totalCorrect / totalHands) * 100).toFixed(1) : null;
+                      const treeName = d ? lineTrees.find(t => t.id === d.lineTreeId)?.name ?? "?" : "";
+                      return (
+                        <div className="flex items-center justify-between">
+                          <div className="flex flex-col min-w-0">
+                            <span className={`text-xs font-medium truncate ${active ? "text-foreground" : "text-muted-foreground group-hover:text-foreground"}`}>{item.name}</span>
+                            {d && (
+                              <span className="text-[9px] text-muted-foreground" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+                                {treeName} · {d.heroPosition}
+                              </span>
+                            )}
+                            {avg && (
+                              <span className="text-[9px]" style={{
+                                fontFamily: "'JetBrains Mono', monospace",
+                                color: parseFloat(avg) >= 80 ? "#22c55e" : parseFloat(avg) >= 60 ? "#fbbf24" : "#ef4444",
+                              }}>
+                                Avg. {avg}%
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }}
+                    emptyMessage="No line drills yet — create one to get started."
+                  />
+                </div>
+              )}
+            </div>
           </DrawerContent>
         </Drawer>
       </div>
@@ -418,33 +1123,331 @@ export default function Trainer() {
         {view === "drills" && (
           <div className="flex flex-col items-center justify-center h-full gap-6 text-center">
             <div className="w-16 h-16 rounded-full border-2 border-primary/30 flex items-center justify-center" style={{ backgroundColor: "var(--accent)" }}>
-              <span style={{ fontSize: 28 }}>🃏</span>
+              <span style={{ fontSize: 28 }}>{mode === "line" ? "🌳" : "🃏"}</span>
             </div>
             <div>
-              <h2 className="text-xl font-semibold text-foreground">Drill Trainer</h2>
+              <h2 className="text-xl font-semibold text-foreground">{mode === "line" ? "Line Drill Trainer" : "Drill Trainer"}</h2>
               <p className="text-sm text-muted-foreground mt-1">
-                {drills.length === 0 ? "Create a drill to define your table setup and start training." : "Select a drill from the sidebar or create a new one."}
+                {mode === "line"
+                  ? (lineDrills.length === 0 ? "Create a line drill to define your tree setup and start training." : "Select a line drill from the sidebar or create a new one.")
+                  : (drills.length === 0 ? "Create a drill to define your table setup and start training." : "Select a drill from the sidebar or create a new one.")
+                }
               </p>
             </div>
-            <button onClick={startNewDrill} className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-primary text-primary-foreground font-semibold text-sm hover:bg-primary/90 transition-colors">
-              <Plus size={15} /> Create Drill
-            </button>
+            {mode === "range" ? (
+              <button onClick={startNewDrill} className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-primary text-primary-foreground font-semibold text-sm hover:bg-primary/90 transition-colors">
+                <Plus size={15} /> Create Drill
+              </button>
+            ) : (
+              <button onClick={startNewLineDrill} className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-primary text-primary-foreground font-semibold text-sm hover:bg-primary/90 transition-colors">
+                <Plus size={15} /> Create Line Drill
+              </button>
+            )}
           </div>
         )}
 
-        {view === "edit-drill" && (
-          <div className="p-2">
-            <h2 className="text-base font-semibold text-foreground mb-5">
-              {editingDrill ? "Edit Drill" : "New Drill"}
-            </h2>
-            <DrillEditor
-              initial={editingDrill}
-              ranges={ranges}
-              onSave={saveDrill}
-              onCancel={() => setView(selectedDrill ? "training" : "drills")}
-            />
+        {view === "line-drill-preview" && selectedLineDrill && (
+          <div className="flex flex-col lg:flex-row gap-4 lg:gap-6 h-full">
+            <div className="flex-1 lg:flex-[7] flex flex-col gap-3 lg:gap-4 min-w-0">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-base lg:text-lg font-semibold text-foreground">{selectedLineDrill.name}</h2>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {selectedLineDrillTree ? `${selectedLineDrillTree.name} · ` : ""}{lineTreeNodes.length} nodes · {lineTreeEdges.length} connections · {selectedLineDrill.heroPosition}
+                  </p>
+                  {selectedLineDrill.description && (
+                    <p className="text-xs text-muted-foreground mt-0.5">{selectedLineDrill.description}</p>
+                  )}
+                </div>
+                <button onClick={startLineDrillTraining} className="px-5 py-2 rounded-full bg-primary text-primary-foreground font-semibold text-sm hover:bg-primary/90 transition-colors self-start sm:self-auto">
+                  Start Training
+                </button>
+              </div>
+
+              <div className="bg-card rounded-xl border border-border p-4 lg:p-6 flex flex-col items-center justify-center flex-1 min-h-[200px] gap-4">
+                {lineRootNode && (
+                  <div className="text-center">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Scenario</p>
+                    <p className="text-lg font-semibold">{lineRootNode.data.label}</p>
+                  </div>
+                )}
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-muted-foreground">Position</span>
+                  <span className="text-xs px-3 py-1 rounded-full bg-secondary text-foreground font-medium">{selectedLineDrill.heroPosition}</span>
+                </div>
+              </div>
+
+              <div className="bg-card rounded-xl border border-border p-4">
+                <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Node Accuracy Overview</h3>
+                {(() => {
+                  const correctNodes = lineTreeNodes.filter((n) => n.data.correct);
+                  if (correctNodes.length === 0) {
+                    return <p className="text-xs text-muted-foreground">No correct nodes marked in this line tree.</p>;
+                  }
+                  const allStats = correctNodes
+                    .map((n) => ({ label: n.data.actionType ?? "?", stats: n.data.stats ?? { total: 0, correct: 0 } }))
+                    .filter((s) => s.stats.total > 0);
+                  if (allStats.length === 0) {
+                    return <p className="text-xs text-muted-foreground">No training data yet.</p>;
+                  }
+                  const avg = allStats.reduce((s, n) => s + (n.stats.correct / n.stats.total), 0) / allStats.length;
+                  return (
+                    <div className="space-y-2">
+                      <p className="text-2xl font-bold text-center" style={{
+                        fontFamily: "'JetBrains Mono', monospace",
+                        color: avg >= 0.8 ? "#22c55e" : avg >= 0.6 ? "#fbbf24" : "#ef4444",
+                      }}>
+                        {(avg * 100).toFixed(1)}%
+                      </p>
+                      <div className="flex flex-col gap-1">
+                        {allStats.map((s, i) => (
+                          <div key={i} className="flex items-center justify-between text-xs py-0.5 px-1 rounded hover:bg-secondary">
+                            <span className="font-medium">{s.label}</span>
+                            <span style={{
+                              fontFamily: "'JetBrains Mono', monospace",
+                              color: (s.stats.correct / s.stats.total) >= 0.8 ? "#22c55e" : (s.stats.correct / s.stats.total) >= 0.6 ? "#fbbf24" : "#ef4444",
+                            }}>
+                              {s.stats.correct}/{s.stats.total}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+
+            <div className="flex-1 lg:flex-[3] flex flex-col gap-3 lg:gap-4 min-w-0">
+              {(() => {
+                const drillSessions = lineSessions
+                  .filter((s) => s.lineDrillId === selectedLineDrill.id && s.endedAt !== null)
+                  .sort((a, b) => a.startedAt - b.startedAt);
+                return (
+                  <>
+                    <div className="bg-card rounded-xl border border-border p-3">
+                      <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Progress</h3>
+                      {drillSessions.length > 1 ? (
+                        <ResponsiveContainer width="100%" height={180}>
+                          <AreaChart data={drillSessions.map(s => ({
+                            date: formatDate(s.startedAt),
+                            accuracy: s.total > 0 ? Math.round((s.correct / s.total) * 100) : 0,
+                          }))}>
+                            <defs>
+                              <linearGradient id="lineAccGrad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3}/>
+                                <stop offset="95%" stopColor="#22c55e" stopOpacity={0}/>
+                              </linearGradient>
+                            </defs>
+                            <XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                            <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} width={30} />
+                            <Tooltip
+                              contentStyle={{ backgroundColor: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12 }}
+                            />
+                            <Area type="monotone" dataKey="accuracy" stroke="#22c55e" fill="url(#lineAccGrad)" strokeWidth={2} />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <p className="text-xs text-muted-foreground text-center py-8">Complete multiple sessions to see your progress.</p>
+                      )}
+                    </div>
+
+                    <div className="flex flex-col gap-1.5 flex-1 overflow-y-auto">
+                      <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Past Sessions</span>
+                      {drillSessions.length === 0 && (
+                        <p className="text-xs text-muted-foreground">No completed sessions yet.</p>
+                      )}
+                      <div className="flex flex-col gap-1">
+                        {[...drillSessions].reverse().slice(0, 20).map((s) => {
+                          const pct = s.total > 0 ? ((s.correct / s.total) * 100).toFixed(1) : "0.0";
+                          return (
+                            <div key={s.id} className="flex items-center justify-between px-2 py-1.5 rounded-md text-xs">
+                              <span className="text-muted-foreground truncate">{formatDate(s.startedAt)}</span>
+                              <span className="font-bold" style={{
+                                fontFamily: "'JetBrains Mono', monospace",
+                                color: parseFloat(pct) >= 80 ? "#22c55e" : parseFloat(pct) >= 60 ? "#fbbf24" : "#ef4444",
+                              }}>
+                                {pct}%
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
           </div>
         )}
+
+        {view === "line-drill-training" && selectedLineDrill && currentLineSession && (
+          <div className="flex flex-col lg:flex-row gap-4 lg:gap-6 h-full">
+            <div className="flex-1 lg:flex-[7] flex flex-col items-center gap-4 lg:gap-6 min-w-0">
+              {currentNode && heroActions.length > 0 ? (
+                <>
+                  <div className="w-full max-w-4xl flex items-center gap-2 flex-wrap">
+                    {lineRootNode && (
+                      <span className="text-sm font-semibold text-foreground">{lineRootNode.data.label}</span>
+                    )}
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-secondary text-muted-foreground font-medium">
+                      {selectedLineDrill.heroPosition}
+                    </span>
+                    {currentNode.data.street && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-secondary text-muted-foreground font-medium">
+                        {currentNode.data.street.charAt(0).toUpperCase() + currentNode.data.street.slice(1)}
+                      </span>
+                    )}
+                    {currentPathIndex >= 0 && paths[currentPathIndex] && (
+                      <div className="flex items-center gap-1 text-[10px] text-muted-foreground ml-auto truncate max-w-[200px] sm:max-w-none">
+                        {paths[currentPathIndex].slice(1, currentStepIndex + 1).map((nodeId, i, arr) => {
+                          const n = lineTreeNodes.find(nd => nd.id === nodeId);
+                          if (!n) return null;
+                          const label = n.data.actionType
+                            ? n.data.actionType.charAt(0).toUpperCase() + n.data.actionType.slice(1)
+                            : n.data.label;
+                          return (
+                            <span key={nodeId} className="inline-flex items-center gap-1">
+                              {i > 0 && <span className="text-muted-foreground/50">→</span>}
+                              <span className={`font-medium ${i === arr.length - 1 ? "text-foreground" : "text-muted-foreground"}`}>{label}</span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="w-full max-w-4xl">
+                    <PokerTable
+                      positions={["BU", "BB"]}
+                      heroPosition={selectedLineDrill.heroPosition}
+                      boardCards={boardCards}
+                    />
+                  </div>
+
+                  {isVillainTurn ? (
+                    <div className="w-full max-w-lg text-center py-4">
+                      <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                        <span className="inline-block w-2 h-2 rounded-full bg-muted-foreground/50 animate-pulse" />
+                        Villain {villainAction?.label ?? "acting"}...
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="w-full max-w-lg">
+                      <p className="text-xs text-muted-foreground mb-2 text-center">Your action:</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {heroActions.map((child) => {
+                          const isCorrect = currentCorrectChild?.id === child.id;
+                          const wasWrong = lineAnswer === child.id && !isCorrect;
+                          const wasRight = lineAnswer === child.id && isCorrect;
+                          let btnClass = "py-3 rounded-lg border-2 font-semibold text-xs sm:text-sm transition-all truncate px-3 ";
+                          if (wasRight) btnClass += "border-green-500 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300";
+                          else if (wasWrong) btnClass += "border-red-500 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300";
+                          else if (lineAnswer && isCorrect) btnClass += "border-green-500 bg-green-100/50 dark:bg-green-900/20 text-green-700 dark:text-green-300 opacity-60";
+                          else btnClass += "border-border bg-card text-foreground hover:bg-secondary";
+                          return (
+                            <button
+                              key={child.id}
+                              onClick={() => lineAnswerAction(child.id)}
+                              disabled={lineAnswer !== null}
+                              className={btnClass}
+                            >
+                              {child.data.actionType ? (
+                                <span className="flex flex-col items-center gap-0.5">
+                                  <span>{child.data.actionType.charAt(0).toUpperCase() + child.data.actionType.slice(1)}</span>
+                                  {child.data.betSize && (
+                                    <span className="text-[10px] opacity-70 font-mono">{child.data.betSize}</span>
+                                  )}
+                                </span>
+                              ) : child.data.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center text-center space-y-4">
+                  <p className="text-base font-semibold text-foreground">
+                    {currentNode ? "Completing path..." : "All paths complete!"}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {currentNode ? "Calculating results." : "You've completed all available decision paths."}
+                  </p>
+                  {!currentNode && (
+                    <button onClick={stopLineDrillTraining} className="px-6 py-2.5 rounded-full bg-primary text-primary-foreground font-semibold text-sm hover:bg-primary/90 transition-colors">
+                      Finish Session
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex-1 lg:flex-[3] flex flex-col gap-3 lg:gap-4 min-w-0">
+              <div className="bg-card rounded-xl border border-border p-4 text-center">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">Session Accuracy</p>
+                <p className="text-2xl lg:text-3xl font-bold" style={{
+                  fontFamily: "'JetBrains Mono', monospace",
+                  color: lineAccuracy ? (parseFloat(lineAccuracy) >= 80 ? "#22c55e" : parseFloat(lineAccuracy) >= 60 ? "#fbbf24" : "#ef4444") : "var(--muted-foreground)",
+                }}>
+                  {lineAccuracy ?? "0.0"}%
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">{lineStats.correct}/{lineStats.total} correct</p>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                {currentLineSession && currentLineSession.history.length > 0 && (
+                  <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto">
+                    <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">History</span>
+                    <div className="flex flex-col gap-1">
+                      {currentLineSession.history.slice(0, 15).map((entry, i) => (
+                        <div key={i} className="flex items-center gap-1.5 text-xs py-0.5 px-1 rounded hover:bg-secondary">
+                          {entry.boardCards && renderMiniBoardCards(entry.boardCards)}
+                          <span className="font-mono text-muted-foreground flex-1 truncate">{entry.nodeLabel}</span>
+                          <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${entry.correct ? "bg-green-500" : "bg-red-500"}`} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <button onClick={stopLineDrillTraining} className="flex items-center justify-center gap-2 w-full py-2 rounded-full bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors">
+                  <Square size={10} /> End Session
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {view === "edit-drill" || view === "edit-line-drill" ? (
+          <div className="p-2">
+            {view === "edit-line-drill" ? (
+              <>
+                <h2 className="text-base font-semibold text-foreground mb-5">
+                  {editingLineDrill ? "Edit Line Drill" : "New Line Drill"}
+                </h2>
+                <LineDrillEditor
+                  initial={editingLineDrill}
+                  lineTrees={lineTrees}
+                  onSave={saveLineDrill}
+                  onCancel={() => setView(selectedLineDrill ? "line-drill-training" : "drills")}
+                />
+              </>
+            ) : (
+              <>
+                <h2 className="text-base font-semibold text-foreground mb-5">
+                  {editingDrill ? "Edit Drill" : "New Drill"}
+                </h2>
+                <DrillEditor
+                  initial={editingDrill}
+                  ranges={ranges}
+                  onSave={saveDrill}
+                  onCancel={() => setView(selectedDrill ? "training" : "drills")}
+                />
+              </>
+            )}
+          </div>
+        ) : null}
 
         {(view === "preview" || view === "training") && selectedDrill && viewingSession && (
           <div className="flex flex-col gap-4 lg:gap-6 h-full overflow-y-auto">

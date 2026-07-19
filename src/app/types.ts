@@ -31,11 +31,45 @@ export interface Range {
   actions: ActionDef[];
 }
 
+export interface LineNodeData {
+  label: string;
+  street: 'preflop' | 'flop' | 'turn' | 'river';
+  actor: 'hero' | 'villain' | 'none';
+  nodeType: 'root' | 'action' | 'street-header' | 'street-group' | 'street';
+  actionType?: 'check' | 'bet' | 'raise' | 'fold' | 'call' | 'allin';
+  betSize?: string;
+  correct?: boolean;
+  stats?: { total: number; correct: number };
+  boardCards?: string;
+}
+
+export interface LineTree {
+  id: string;
+  name: string;
+  folderId: string | null;
+  nodes: string;
+  edges: string;
+  viewport?: { x: number; y: number; zoom: number };
+}
+
+export interface LineDrill {
+  id: string;
+  name: string;
+  lineTreeId: string;
+  heroPosition: string;
+  description: string;
+  folderId: string | null;
+}
+
 export interface AppData {
   ranges: Range[];
   drills: Drill[];
   rangeFolders: Folder[];
   drillFolders: Folder[];
+  lineTrees: LineTree[];
+  lineFolders: Folder[];
+  lineDrills: LineDrill[];
+  lineDrillFolders: Folder[];
 }
 
 export interface ComboStat {
@@ -52,4 +86,17 @@ export interface SessionData {
   correct: number;
   history: { hand: string; combo?: string; correct: boolean }[];
   comboStats: Record<string, ComboStat>;
+}
+
+export interface LineSessionData {
+  id: string;
+  lineTreeId: string;
+  lineDrillId?: string;
+  heroPosition: string;
+  startedAt: number;
+  endedAt: number | null;
+  total: number;
+  correct: number;
+  history: { nodeId: string; nodeLabel: string; correct: boolean; boardCards?: string }[];
+  usedFlopNodeIds?: string[];
 }

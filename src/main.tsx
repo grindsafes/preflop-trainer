@@ -9,6 +9,7 @@ import App from "./app/App";
 import Community from "./app/pages/Community";
 import Builder from "./app/pages/Builder";
 import Trainer from "./app/pages/Trainer";
+import Lines from "./app/pages/Lines";
 import { Toaster } from "./app/components/ui/sonner";
 import "./styles/index.css";
 
@@ -24,6 +25,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="community" element={<Community />} />
               <Route path="charts" element={<Builder />} />
               <Route path="trainer" element={<Trainer />} />
+              <Route path="lines" element={<Lines />} />
             </Route>
           </Routes>
         </BrowserRouter>

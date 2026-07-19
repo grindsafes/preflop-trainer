@@ -9,7 +9,7 @@ import { Drawer, DrawerTrigger, DrawerContent, DrawerHeader, DrawerTitle } from 
 
 export default function App() {
   const { theme, setTheme } = useTheme();
-  const { ranges, drills, importRef, exportData, importData } = useTrainerContext();
+  const { ranges, drills, lineDrills, importRef, exportData, importData } = useTrainerContext();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   return (
@@ -28,7 +28,7 @@ export default function App() {
         </div>
 
         <nav className="hidden lg:flex gap-1">
-          {(["community", "charts", "trainer"] as const).map((t) => (
+          {(["community", "charts", "trainer", "lines"] as const).map((t) => (
             <NavLink
               key={t}
               to={`/${t}`}
@@ -36,13 +36,13 @@ export default function App() {
                 `px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${isActive ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground"}`
               }
             >
-              {t === "community" ? "Community" : t === "charts" ? "Charts" : "Trainer"}
+              {t === "community" ? "Community" : t === "charts" ? "Charts" : t === "trainer" ? "Trainer" : "Lines"}
             </NavLink>
           ))}
         </nav>
 
         <div className="ml-auto flex items-center gap-2">
-          <span className="hidden md:inline text-xs text-muted-foreground mr-2">{ranges.length} range{ranges.length !== 1 ? "s" : ""} · {drills.length} drill{drills.length !== 1 ? "s" : ""}</span>
+          <span className="hidden md:inline text-xs text-muted-foreground mr-2">{ranges.length} range{ranges.length !== 1 ? "s" : ""} · {drills.length} drill{drills.length !== 1 ? "s" : ""}{lineDrills.length > 0 ? ` · ${lineDrills.length} line drill${lineDrills.length !== 1 ? "s" : ""}` : ""}</span>
           <button
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border border-border text-muted-foreground hover:text-foreground hover:border-muted-foreground transition-colors"
@@ -80,7 +80,7 @@ export default function App() {
               </DrawerHeader>
               <div className="px-4 pb-6 flex flex-col gap-3">
                 <nav className="flex flex-col gap-1">
-                  {(["community", "charts", "trainer"] as const).map((t) => (
+                  {(["community", "charts", "trainer", "lines"] as const).map((t) => (
                     <NavLink
                       key={t}
                       to={`/${t}`}
@@ -90,13 +90,13 @@ export default function App() {
                         `px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${isActive ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"}`
                       }
                     >
-                      {t === "community" ? "Community" : t === "charts" ? "Charts" : "Trainer"}
+                      {t === "community" ? "Community" : t === "charts" ? "Charts" : t === "trainer" ? "Trainer" : "Lines"}
                     </NavLink>
                   ))}
                 </nav>
                 <div className="h-px bg-border my-1" />
                 <div className="flex items-center gap-3 px-1">
-                  <span className="text-xs text-muted-foreground">{ranges.length} range{ranges.length !== 1 ? "s" : ""} · {drills.length} drill{drills.length !== 1 ? "s" : ""}</span>
+                  <span className="text-xs text-muted-foreground">{ranges.length} range{ranges.length !== 1 ? "s" : ""} · {drills.length} drill{drills.length !== 1 ? "s" : ""}{lineDrills.length > 0 ? ` · ${lineDrills.length} line drill${lineDrills.length !== 1 ? "s" : ""}` : ""}</span>
                 </div>
                 <div className="flex gap-2 px-1">
                   <button onClick={() => { exportData(); setDrawerOpen(false); }} className="flex items-center gap-1.5 text-xs px-4 py-2 rounded-full border border-border text-muted-foreground hover:text-foreground hover:border-muted-foreground transition-colors">

@@ -10,12 +10,46 @@ interface PokerTableProps {
   foldedPositions?: string[];
   betSizes?: Record<string, string>;
   flippingOut?: boolean;
+  boardCards?: string;
 }
 
-export function PokerTable({ positions, heroPosition, onSelectHero, compact = false, heroHand, foldedPositions = [], betSizes = {}, flippingOut = false }: PokerTableProps) {
+export function PokerTable({ positions, heroPosition, onSelectHero, compact = false, heroHand, foldedPositions = [], betSizes = {}, flippingOut = false, boardCards }: PokerTableProps) {
   const N = positions.length;
   const heroIdx = positions.indexOf(heroPosition);
   const interactive = !!onSelectHero;
+
+  const parsedBoard = boardCards
+    ? boardCards.split(",").map(c => c.trim()).filter(Boolean).map(c => {
+        if (c.length < 2) return null;
+        const rank = c[0].toUpperCase();
+        const suit = c[1].toLowerCase();
+        const suitSymbol: Record<string, string> = { s: "♠", h: "♥", d: "♦", c: "♣" };
+        return { rank, suit: suitSymbol[suit] ?? "?", color: ({ s: "#000", h: "#ef4444", d: "#3b82f6", c: "#22c55e" })[suit] ?? "var(--card-foreground)" };
+      }).filter((x): x is NonNullable<typeof x> => x !== null)
+    : [];
+
+  function renderBoardCards() {
+    const cx = T_CX, cy = T_CY - 15;
+    const cw = 24, ch = 36, gap = 2;
+    const totalW = parsedBoard.length * (cw + gap) - gap;
+    const startX = cx - totalW / 2;
+    return (
+      <g>
+        {parsedBoard.map((card, i) => (
+          <g key={i}>
+            <rect x={startX + i * (cw + gap)} y={cy - ch / 2} width={cw} height={ch} rx={4} style={{ fill: card.color }} stroke="var(--border)" strokeWidth={0.8} />
+            <rect x={startX + i * (cw + gap) + 1.5} y={cy - ch / 2 + 1.5} width={cw - 3} height={ch - 3} rx={3} fill="none" stroke="white" strokeWidth={0.6} />
+            <text x={startX + i * (cw + gap) + cw / 2} y={cy - 4} textAnchor="middle" dominantBaseline="middle" fill="white" fontSize={11} fontWeight={700} fontFamily="JetBrains Mono, monospace">
+              {card.rank}
+            </text>
+            <text x={startX + i * (cw + gap) + cw / 2} y={cy + 10} textAnchor="middle" dominantBaseline="middle" fill="white" fontSize={7}>
+              {card.suit}
+            </text>
+          </g>
+        ))}
+      </g>
+    );
+  }
 
     function renderHeroCards(combo: string, cx: number, cy: number) {
     const { ranks, suits, colors } = parseCombo(combo);
@@ -210,6 +244,8 @@ export function PokerTable({ positions, heroPosition, onSelectHero, compact = fa
           </g>
         );
       })}
+
+      {parsedBoard.length > 0 && renderBoardCards()}
 
       <style>{`
         @keyframes flipIn {

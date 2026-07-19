@@ -2,7 +2,7 @@ import {
   ALL_POSITIONS, T_CX, T_CY, S_RX, S_RY, RANKS,
   SUIT_MAP, BLACK_SUIT_CHARS, RED_SUIT_CHARS, ALL_SUIT_CHARS,
 } from "./constants";
-import type { ActionDef, AppData, SessionData } from "./types";
+import type { ActionDef, AppData, SessionData, LineTree, LineSessionData } from "./types";
 
 export function getPositions(numPlayers: number): string[] {
   return ALL_POSITIONS.slice(ALL_POSITIONS.length - numPlayers);
@@ -68,7 +68,7 @@ export function getActionStyle(a: ActionDef) {
   };
 }
 
-const STORAGE_KEY = "poker-trainer-data";
+export const STORAGE_KEY = "poker-trainer-data";
 
 export function loadFromStorage(): Partial<AppData> {
   try {
@@ -92,4 +92,30 @@ export function loadSessions(): SessionData[] {
 
 export function saveSessions(sessions: SessionData[]) {
   try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions)); } catch { /* quota */ }
+}
+
+const LINES_KEY = "poker-trainer-lines";
+
+export function loadLines(): LineTree[] {
+  try {
+    const raw = localStorage.getItem(LINES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+export function saveLines(trees: LineTree[]) {
+  try { localStorage.setItem(LINES_KEY, JSON.stringify(trees)); } catch { /* quota */ }
+}
+
+const LINE_SESSIONS_KEY = "poker-trainer-line-sessions";
+
+export function loadLineSessions(): LineSessionData[] {
+  try {
+    const raw = localStorage.getItem(LINE_SESSIONS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+export function saveLineSessions(sessions: LineSessionData[]) {
+  try { localStorage.setItem(LINE_SESSIONS_KEY, JSON.stringify(sessions)); } catch { /* quota */ }
 }

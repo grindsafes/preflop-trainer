@@ -17,17 +17,19 @@ interface FolderTreeProps {
   onRenameFolder: (folderId: string, name: string) => void;
   onSelectItem: (item: { id: string; name: string; folderId: string | null }) => void;
   renderItem: (item: { id: string; name: string; folderId: string | null }) => ReactNode;
+  onRenameItem?: (itemId: string, name: string) => void;
+  onRenameItem?: (itemId: string, name: string) => void;
   onEditItem?: (itemId: string) => void;
   onDeleteItem?: (itemId: string) => void;
   onDuplicateItem?: (itemId: string) => void;
   selectedItemId?: string;
-  emptyMessage?: string;
 }
+
 
 export function FolderTree({
   items, folders, onMoveItem, onMoveFolder, allFolders,
   onDeleteFolder, onRenameFolder, onSelectItem, renderItem,
-  onEditItem, onDeleteItem, onDuplicateItem, selectedItemId,
+  onRenameItem, onEditItem, onDeleteItem, onDuplicateItem, selectedItemId,
   emptyMessage = "No items yet",
 }: FolderTreeProps) {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
@@ -59,7 +61,11 @@ export function FolderTree({
 
   function commitRename() {
     if (renamingId && renameValue.trim()) {
-      onRenameFolder(renamingId, renameValue.trim());
+      if (folders.some((f) => f.id === renamingId)) {
+        onRenameFolder(renamingId, renameValue.trim());
+      } else if (onRenameItem) {
+        onRenameItem(renamingId, renameValue.trim());
+      }
     }
     setRenamingId(null);
   }
@@ -97,6 +103,7 @@ export function FolderTree({
           onDeleteFolder={onDeleteFolder}
           onSelectItem={onSelectItem}
           renderItem={renderItem}
+          onRenameItem={onRenameItem}
           onEditItem={onEditItem}
           onDeleteItem={onDeleteItem}
           onDuplicateItem={onDuplicateItem}
@@ -113,6 +120,13 @@ export function FolderTree({
             renderItem={renderItem}
             onMoveItem={onMoveItem}
             allFolders={allFolders}
+            renamingId={renamingId}
+            renameValue={renameValue}
+            onRenameChange={setRenameValue}
+            onCommitRename={commitRename}
+            onCancelRename={() => setRenamingId(null)}
+            onStartRename={(id, name) => { setRenamingId(id); setRenameValue(name); }}
+            onRenameItem={onRenameItem}
             onEditItem={onEditItem}
             onDeleteItem={onDeleteItem}
             onDuplicateItem={onDuplicateItem}
@@ -146,6 +160,7 @@ interface FolderNodeProps {
   onDeleteFolder: (folderId: string) => void;
   onSelectItem: (item: { id: string; name: string; folderId: string | null }) => void;
   renderItem: (item: { id: string; name: string; folderId: string | null }) => ReactNode;
+  onRenameItem?: (itemId: string, name: string) => void;
   onEditItem?: (itemId: string) => void;
   onDeleteItem?: (itemId: string) => void;
   onDuplicateItem?: (itemId: string) => void;
@@ -157,7 +172,7 @@ function FolderNode({
   renamingId, renameValue,
   onToggleFolder, onRenameChange, onCommitRename, onCancelRename, onStartRename,
   onMoveItem, onMoveFolder, onDeleteFolder, onSelectItem, renderItem,
-  onEditItem, onDeleteItem, onDuplicateItem, selectedItemId,
+  onRenameItem, onEditItem, onDeleteItem, onDuplicateItem, selectedItemId,
 }: FolderNodeProps) {
   const isExpanded = expandedFolders.has(folder.id);
   const childFolders = folders.filter((f) => f.parentId === folder.id);
@@ -287,6 +302,7 @@ function FolderNode({
               onDeleteFolder={onDeleteFolder}
               onSelectItem={onSelectItem}
               renderItem={renderItem}
+              onRenameItem={onRenameItem}
               onEditItem={onEditItem}
               onDeleteItem={onDeleteItem}
               onDuplicateItem={onDuplicateItem}
@@ -302,6 +318,13 @@ function FolderNode({
               renderItem={renderItem}
               onMoveItem={onMoveItem}
               allFolders={allFolders}
+              renamingId={renamingId}
+              renameValue={renameValue}
+              onRenameChange={onRenameChange}
+              onCommitRename={onCommitRename}
+              onCancelRename={onCancelRename}
+              onStartRename={onStartRename}
+              onRenameItem={onRenameItem}
               onEditItem={onEditItem}
               onDeleteItem={onDeleteItem}
               onDuplicateItem={onDuplicateItem}
@@ -326,6 +349,13 @@ interface ItemNodeProps {
   renderItem: (item: { id: string; name: string; folderId: string | null }) => ReactNode;
   onMoveItem: (itemId: string, toFolderId: string | null) => void;
   allFolders: Folder[];
+  renamingId: string | null;
+  renameValue: string;
+  onRenameChange: (v: string) => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
+  onStartRename: (id: string, name: string) => void;
+  onRenameItem?: (itemId: string, name: string) => void;
   onEditItem?: (itemId: string) => void;
   onDeleteItem?: (itemId: string) => void;
   onDuplicateItem?: (itemId: string) => void;
@@ -334,7 +364,8 @@ interface ItemNodeProps {
 
 function ItemNode({
   item, depth, onSelectItem, renderItem, onMoveItem, allFolders,
-  onEditItem, onDeleteItem, onDuplicateItem, selectedItemId,
+  renamingId, renameValue, onRenameChange, onCommitRename, onCancelRename, onStartRename,
+  onRenameItem, onEditItem, onDeleteItem, onDuplicateItem, selectedItemId,
 }: ItemNodeProps) {
   const [{ isDragging }, dragRef] = useDrag(() => ({
     type: DND_ITEM,
@@ -357,10 +388,22 @@ function ItemNode({
       ref={dragRef}
       className={`flex items-center py-2 rounded-md cursor-pointer transition-colors group ${isSelected ? "bg-secondary text-foreground pr-3" : "hover:bg-secondary"} ${isDragging ? "opacity-40" : ""}`}
       style={{ paddingLeft: `${depth * 16 + (isSelected && depth === 0 ? 12 : 0)}px` }}
-      onClick={() => onSelectItem(item)}
+      onClick={() => { if (renamingId !== item.id) onSelectItem(item); }}
     >
       <div className="flex-1 min-w-0">
-        {renderItem(item)}
+        {renamingId === item.id ? (
+          <input
+            autoFocus
+            value={renameValue}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => onRenameChange(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") onCommitRename(); if (e.key === "Escape") onCancelRename(); }}
+            onBlur={onCommitRename}
+            className="w-full bg-secondary text-foreground text-xs font-medium px-2 py-0.5 rounded border border-border focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        ) : (
+          renderItem(item)
+        )}
       </div>
       <Popover open={movePopoverOpen} onOpenChange={setMovePopoverOpen}>
         <PopoverTrigger asChild>
@@ -393,7 +436,16 @@ function ItemNode({
               <span className="truncate">{dest.name}</span>
             </button>
           ))}
-          {(onDuplicateItem || onEditItem || onDeleteItem) && <div className="h-px bg-border my-1" />}
+          {(onRenameItem || onDuplicateItem || onEditItem || onDeleteItem) && <div className="h-px bg-border my-1" />}
+          {onRenameItem && (
+            <button
+              onClick={() => { onStartRename(item.id, item.name); setMovePopoverOpen(false); }}
+              className="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-left rounded hover:bg-secondary transition-colors"
+            >
+              <Pencil size={12} className="text-muted-foreground flex-shrink-0" />
+              <span>Rename</span>
+            </button>
+          )}
           {onDuplicateItem && (
             <button
               onClick={() => { onDuplicateItem(item.id); setMovePopoverOpen(false); }}
