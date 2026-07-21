@@ -624,7 +624,7 @@ export default function Trainer() {
     for (const nodeId of path) {
       const n = lineTreeNodes.find(nd => nd.id === nodeId);
       if (!n) continue;
-      if (n.data.nodeType === 'street' || n.data.nodeType === 'street-group') {
+      if (n.data.nodeType === 'street' || n.data.nodeType === 'street-group' || n.data.nodeType === 'street-header') {
         if (n.data.street === 'flop' || n.data.street === 'turn' || n.data.street === 'river') {
           currentStreet = n.data.street;
         }
@@ -632,6 +632,23 @@ export default function Trainer() {
       }
       if (!n.data.actionType) continue;
       if (currentStreet === 'preflop') continue;
+
+      if (n.data.actor === 'hero') {
+        const parentEdge = lineTreeEdges.find(e => e.target === nodeId);
+        if (parentEdge) {
+          const correctChild = lineTreeEdges
+            .filter(e => e.source === parentEdge.source)
+            .map(e => lineTreeNodes.find(nd => nd.id === e.target))
+            .find((nd): nd is Node<LineNodeData> => nd?.data.actor === 'hero' && !!nd.data.correct);
+          if (correctChild) {
+            let label = correctChild.data.actionType!.charAt(0).toUpperCase() + correctChild.data.actionType!.slice(1);
+            if (correctChild.data.betSize) label += ` ${correctChild.data.betSize}`;
+            result[currentStreet].push(label);
+            continue;
+          }
+        }
+      }
+
       let label = n.data.actionType.charAt(0).toUpperCase() + n.data.actionType.slice(1);
       if (n.data.betSize) label += ` ${n.data.betSize}`;
       result[currentStreet].push(label);
@@ -912,7 +929,7 @@ export default function Trainer() {
     });
     setLineTreeNodes(updatedNodes);
 
-    const currentPath = paths[currentPathIndex]?.slice(0, currentStepIndex + 2) ?? [];
+    const currentPath = paths[currentPathIndex]?.slice(0, currentStepIndex + 3) ?? [];
     const pathKey = currentPath.length >= 2 ? getPathKey(currentPath) : "";
     const pathLabels = currentPath.length >= 2 ? getPathLabels(currentPath) : [];
 
