@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { Helmet } from "react-helmet-async";
-import { Check, X, Square, Plus, FolderPlus, FolderOpen, GitBranch, Layout, Pencil, Edit, Trash2 } from "lucide-react";
+import { Check, X, Square, Plus, FolderPlus, FolderOpen, GitBranch, Layout, Pencil, Edit, Trash2, StickyNote } from "lucide-react";
 import { toast } from "sonner";
 import { useTrainerContext } from "../TrainerContext";
 import { loadSessions, saveSessions, loadLineSessions, saveLineSessions, expandHand, parseCombo, getPositions, getActionStyle, loadFromStorage } from "../utils";
@@ -12,6 +12,7 @@ import { FolderTree } from "../components/FolderTree";
 import { DrillEditor } from "../components/DrillEditor";
 import { LineDrillEditor } from "../components/LineDrillEditor";
 import { Drawer, DrawerTrigger, DrawerContent, DrawerHeader, DrawerTitle } from "../components/ui/drawer";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../components/ui/dialog";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "../components/ui/table";
 import type { Node, Edge } from "@xyflow/react";
 import type { Drill, Range, SessionData, LineTree, LineNodeData, LineSessionData, LineDrill } from "../types";
@@ -47,6 +48,7 @@ export default function Trainer() {
   const [villainAction, setVillainAction] = useState<{ label: string; betSize?: string } | null>(null);
   const villainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lineAnswerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [answerObservations, setAnswerObservations] = useState<{ label: string; html: string }[] | null>(null);
 
   const [sessions, setSessions] = useState<SessionData[]>(() => loadSessions());
   const [lineSessions, setLineSessions] = useState<LineSessionData[]>(() => loadLineSessions());
@@ -956,9 +958,23 @@ export default function Trainer() {
     setLineSessions(updatedSessions);
     saveLineSessions(updatedSessions);
 
-    if (isCorrect) {
+    const obsNodes: { label: string; html: string }[] = [];
+    if (currentNode?.data.observation) {
+      obsNodes.push({ label: "Situation", html: currentNode.data.observation });
+    }
+    if (correctNode?.data.observation) {
+      obsNodes.push({ label: "Correct — " + (correctNode.data.actionType ?? ""), html: correctNode.data.observation });
+    }
+    if (clicked && clicked.id !== correctNode?.id && clicked.data.observation) {
+      obsNodes.push({ label: "Your answer — " + (clicked.data.actionType ?? ""), html: clicked.data.observation });
+    }
+
+    setLineAnswer(nodeId);
+
+    if (obsNodes.length > 0) {
+      setAnswerObservations(obsNodes);
+    } else if (isCorrect) {
       if (lineAnswerTimerRef.current) clearTimeout(lineAnswerTimerRef.current);
-      setLineAnswer(nodeId);
       lineAnswerTimerRef.current = setTimeout(() => {
         lineAnswerTimerRef.current = null;
         const nextStep = currentStepIndex + 1;
@@ -972,7 +988,6 @@ export default function Trainer() {
       }, 1000);
     } else {
       if (lineAnswerTimerRef.current) clearTimeout(lineAnswerTimerRef.current);
-      setLineAnswer(nodeId);
       lineAnswerTimerRef.current = setTimeout(() => {
         lineAnswerTimerRef.current = null;
         const nextStep = currentStepIndex + 1;
@@ -993,6 +1008,18 @@ export default function Trainer() {
         edges: JSON.stringify(lineTreeEdges),
       });
     }
+  }
+
+  function continueAfterObservation() {
+    setAnswerObservations(null);
+    const nextStep = currentStepIndex + 1;
+    if (nextStep < paths[currentPathIndex].length) {
+      setCurrentStepIndex(nextStep);
+    } else {
+      toast("Path complete!");
+      advanceLinePath();
+    }
+    setLineAnswer(null);
   }
 
   function formatDate(ts: number) {
@@ -2008,6 +2035,41 @@ export default function Trainer() {
         )}
       </div>
     </div>
+
+    <Dialog open={answerObservations !== null} onOpenChange={(open) => { if (!open) continueAfterObservation(); }}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <StickyNote size={16} className="text-yellow-600 dark:text-yellow-400" />
+            Observation
+          </DialogTitle>
+          <DialogDescription>
+            Review the notes for this decision before continuing.
+          </DialogDescription>
+        </DialogHeader>
+        {answerObservations && (
+          <div className="flex flex-col gap-3 max-h-[60vh] overflow-y-auto py-2">
+            {answerObservations.map((obs, i) => (
+              <div key={i}>
+                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1 block">{obs.label}</span>
+                <div
+                  className="prose prose-sm max-w-none dark:prose-invert text-sm text-foreground/80 [&_p]:m-0 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 bg-muted/30 rounded-md p-3"
+                  dangerouslySetInnerHTML={{ __html: obs.html }}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex justify-end">
+          <button
+            onClick={continueAfterObservation}
+            className="px-5 py-2 rounded-full bg-primary text-primary-foreground font-semibold text-sm hover:bg-primary/90 transition-colors"
+          >
+            Continue
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
     </>
   );
 }

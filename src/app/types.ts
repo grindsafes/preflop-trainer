@@ -43,6 +43,7 @@ export interface LineNodeData {
   stats?: { total: number; correct: number };
   boardCards?: string;
   heroCards?: string;
+  observation?: string;
 }
 
 export interface LineTree {

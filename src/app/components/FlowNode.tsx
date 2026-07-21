@@ -1,6 +1,8 @@
 import { memo, useCallback, useRef, useState } from "react";
 import { Handle, Position, useReactFlow, type NodeProps } from "@xyflow/react";
+import { StickyNote } from "lucide-react";
 import type { LineNodeData } from "../types";
+import ObservationDialog from "./ObservationDialog";
 
 const RANKS = "23456789TJQKA";
 const SUITS = ["s", "h", "d", "c"] as const;
@@ -108,6 +110,7 @@ function isValidBetSize(val: string) {
 
 export const ActionNode = memo(({ id, data, selected }: NodeProps<LineNodeData>) => {
   const { updateNodeData } = useReactFlow();
+  const [obsOpen, setObsOpen] = useState(false);
 
   const stopPropagation = useCallback((e: React.SyntheticEvent) => {
     e.stopPropagation();
@@ -203,8 +206,30 @@ export const ActionNode = memo(({ id, data, selected }: NodeProps<LineNodeData>)
             <span className="text-[10px] text-muted-foreground">%</span>
           </div>
         )}
+        <div className="flex items-center justify-between">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setObsOpen(true); }}
+            onPointerDown={stopPropagation}
+            className={`flex items-center gap-1 text-[9px] transition-colors px-1.5 py-0.5 rounded ${
+              data.observation
+                ? "text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20 hover:bg-yellow-100 dark:hover:bg-yellow-900/30"
+                : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+            }`}
+          >
+            <StickyNote size={11} />
+            <span>Notes</span>
+          </button>
+        </div>
       </div>
       <Handle type="source" position={Position.Bottom} className="!bg-border" />
+      <ObservationDialog
+        open={obsOpen}
+        onOpenChange={setObsOpen}
+        value={data.observation ?? ""}
+        onChange={(html) => updateNodeData(id, { observation: html })}
+        nodeLabel={data.actionType ? ACTION_LABELS[data.actionType] : data.label}
+      />
     </div>
   );
 });
