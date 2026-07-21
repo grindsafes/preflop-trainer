@@ -620,14 +620,21 @@ export default function Trainer() {
 
   function getPathActionsByStreet(path: string[]): { flop: string[]; turn: string[]; river: string[] } {
     const result: { flop: string[]; turn: string[]; river: string[] } = { flop: [], turn: [], river: [] };
+    let currentStreet: 'preflop' | 'flop' | 'turn' | 'river' = 'preflop';
     for (const nodeId of path) {
       const n = lineTreeNodes.find(nd => nd.id === nodeId);
-      if (!n || !n.data.actionType) continue;
-      const street = n.data.street;
-      if (street === 'preflop') continue;
+      if (!n) continue;
+      if (n.data.nodeType === 'street' || n.data.nodeType === 'street-group') {
+        if (n.data.street === 'flop' || n.data.street === 'turn' || n.data.street === 'river') {
+          currentStreet = n.data.street;
+        }
+        continue;
+      }
+      if (!n.data.actionType) continue;
+      if (currentStreet === 'preflop') continue;
       let label = n.data.actionType.charAt(0).toUpperCase() + n.data.actionType.slice(1);
       if (n.data.betSize) label += ` ${n.data.betSize}`;
-      result[street].push(label);
+      result[currentStreet].push(label);
     }
     return result;
   }

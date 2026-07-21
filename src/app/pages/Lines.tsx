@@ -337,7 +337,11 @@ export default function Lines() {
   function addActionNode() {
     const center = viewportCenter;
     const offset = nodes.filter((n) => n.type === "action").length;
-    const actionDefaults: Partial<LineNodeData> = selectedNode?.type === "action" ? selectedNode.data : {};
+    const actionDefaults: Partial<LineNodeData> = selectedNode?.data.nodeType === "action"
+      ? selectedNode.data
+      : selectedNode?.data.nodeType === "street" || selectedNode?.data.nodeType === "street-group"
+        ? { street: selectedNode.data.street }
+        : {};
     const newNode = makeActionNode(center, offset, actionDefaults);
     if (selectedNode?.type === "street-group") {
       newNode.parentId = selectedNode.id;
