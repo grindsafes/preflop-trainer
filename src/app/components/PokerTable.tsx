@@ -36,7 +36,8 @@ export function PokerTable({ positions, heroPosition, onSelectHero, compact = fa
     return (
       <g>
         {parsedBoard.map((card, i) => (
-          <g key={i}>
+          <g key={card.rank + card.suit} className="card-flip-in"
+            style={{ animationDelay: `${i * 0.1}s`, transformOrigin: "center", animationFillMode: "backwards" }}>
             <rect x={startX + i * (cw + gap)} y={cy - ch / 2} width={cw} height={ch} rx={4} style={{ fill: card.color }} stroke="var(--border)" strokeWidth={0.8} />
             <rect x={startX + i * (cw + gap) + 1.5} y={cy - ch / 2 + 1.5} width={cw - 3} height={ch - 3} rx={3} fill="none" stroke="white" strokeWidth={0.6} />
             <text x={startX + i * (cw + gap) + cw / 2} y={cy - 4} textAnchor="middle" dominantBaseline="middle" fill="white" fontSize={11} fontWeight={700} fontFamily="JetBrains Mono, monospace">
